@@ -33,16 +33,29 @@ BINANCE_URL = "https://api.binance.com/api/v3/ticker/24hr"
 # Constants
 INVESTMENT_AMOUNT = 100
 BINANCE_FEES_PCT = 0.001
-SYMBOL_TTL = 30  # Reduced to check more frequently
+SYMBOL_TTL = 60  # Increased to avoid overtrading
 recent_symbols = {}
+
+# Trading Parameters
+MIN_15M_CHANGE = 1.0     # Minimum 15m price change to consider entry
+MIN_5M_CHANGE = 0.3      # Minimum 5m price change to consider entry
+MIN_PROBABILITY = 0.15    # Minimum probability of 3% jump
+MIN_VOLUME_PERCENTILE = 75  # Only trade coins in top 75% by volume
 
 # Global variables for trade tracking
 active_trades = {}
-TRADE_TIMEOUT = timedelta(minutes=15)  # Reduced timeout for quicker trades
-TARGET_PRICE_CHANGE = 0.7  # Target 0.7% price change
-MIN_PRICE_CHANGE = 0.05  # Minimum price movement to consider entry
-MAX_ACTIVE_TRADES = 3
-STOP_LOSS_PCT = -0.05  # Stop loss at -0.05%
+MAX_ACTIVE_TRADES = 2     # Reduced to manage risk better
+TRADE_TIMEOUT = timedelta(minutes=30)  # Increased to give trades more room
+
+# Blacklist settings
+symbol_blacklist = {}
+BLACKLIST_DURATION = 1800  # 30-minute cooldown after a loss
+consecutive_losses = {}    # Track consecutive losses per symbol
+MAX_CONSECUTIVE_LOSSES = 2  # Blacklist after 2 consecutive losses
+
+# Performance tracking
+trade_history = []
+MAX_TRADE_HISTORY = 20    # Keep last 20 trades for statistics
 
 def fetch_usdt_tickers():
     try:
@@ -212,6 +225,92 @@ class SimulatedTrade:
     probability: float
     initial_pnl: float
     trade_id: Optional[int] = None  # Track the database ID
+    stop_loss: float = 0.0
+    take_profit: float = 0.0
+    volume_percentile: float = 0.0
+    atr: float = 0.0
+
+@dataclass
+class TradeResult:
+    symbol: str
+    entry_price: float
+    exit_price: float
+    quantity: float
+    pnl: float
+    duration: timedelta
+    exit_reason: str
+    timestamp: datetime
+
+class TradeStats:
+    def __init__(self, max_history: int = 20):
+        self.trades = []
+        self.max_history = max_history
+    
+    def add_trade(self, trade: TradeResult):
+        self.trades.append(trade)
+        if len(self.trades) > self.max_history:
+            self.trades.pop(0)
+    
+    def get_win_rate(self) -> float:
+        if not self.trades:
+            return 0.0
+        wins = sum(1 for t in self.trades if t.pnl > 0)
+        return wins / len(self.trades)
+    
+    def get_avg_pnl(self) -> float:
+        if not self.trades:
+            return 0.0
+        return sum(t.pnl for t in self.trades) / len(self.trades)
+    
+    def get_max_drawdown(self) -> float:
+        if not self.trades:
+            return 0.0
+        cumulative = 0
+        max_drawdown = 0
+        peak = 0
+        
+        for trade in self.trades:
+            cumulative += trade.pnl
+            if cumulative > peak:
+                peak = cumulative
+            drawdown = peak - cumulative
+            max_drawdown = min(max_drawdown, drawdown)
+        
+        return max_drawdown
+
+class RiskManager:
+    def __init__(self):
+        self.blacklist = {}
+        self.consecutive_losses = {}
+    
+    def should_blacklist(self, symbol: str, pnl: float) -> bool:
+        # Update consecutive losses
+        if pnl <= 0:
+            self.consecutive_losses[symbol] = self.consecutive_losses.get(symbol, 0) + 1
+            if self.consecutive_losses[symbol] >= MAX_CONSECUTIVE_LOSSES:
+                self.blacklist[symbol] = time.time() + BLACKLIST_DURATION
+                return True
+        else:
+            self.consecutive_losses[symbol] = 0
+        return False
+    
+    def is_blacklisted(self, symbol: str) -> bool:
+        if symbol in self.blacklist:
+            if time.time() > self.blacklist[symbol]:
+                del self.blacklist[symbol]
+                return False
+            return True
+        return False
+
+    def calculate_dynamic_limits(self, symbol: str, entry_price: float, atr: float) -> tuple[float, float]:
+        """Calculate dynamic stop loss and take profit based on ATR"""
+        stop_loss = entry_price - (1.5 * atr)
+        take_profit = entry_price + (2.0 * atr)
+        return stop_loss, take_profit
+
+# Initialize global instances
+trade_stats = TradeStats(MAX_TRADE_HISTORY)
+risk_manager = RiskManager()
 
 def save_trade_entry(symbol: str, buy_price: float, quantity: float) -> Optional[int]:
     """Save new trade to Supabase and return the trade ID"""
@@ -243,21 +342,31 @@ def update_trade_exit(trade_id: int, sell_price: float, profit_loss: float):
 # Removed duplicate trade functions as we're using simulate_trade_entry and check_trade_exit instead
 
 def evaluate_trading_opportunity(symbol: str, delta_15m: float, delta_5m: float, prob_3pct: float, 
-                               current_price: float, pnl: float):
-    """Evaluate if we should enter a trade based on price movements"""
-    # Check for minimum price movement in last 5 minutes
-    if delta_5m < MIN_PRICE_CHANGE:
+                               current_price: float, pnl: float, volume_percentile: float, atr: float):
+    """Evaluate if we should enter a trade based on enhanced criteria"""
+    # Check if symbol is blacklisted
+    if risk_manager.is_blacklisted(symbol):
+        return
+
+    # Enhanced entry criteria
+    if (delta_15m < MIN_15M_CHANGE or
+        delta_5m < MIN_5M_CHANGE or
+        prob_3pct < MIN_PROBABILITY or
+        volume_percentile < MIN_VOLUME_PERCENTILE):
         return
         
     # Calculate quantity based on investment amount
     quantity = INVESTMENT_AMOUNT / current_price
     
-    # If criteria met, simulate trade entry with 5m change as initial_pnl
-    if simulate_trade_entry(symbol, current_price, quantity, prob_3pct, delta_5m):
+    # Calculate dynamic stop loss and take profit levels
+    stop_loss, take_profit = risk_manager.calculate_dynamic_limits(symbol, current_price, atr)
+    
+    # If criteria met, simulate trade entry
+    if simulate_trade_entry(symbol, current_price, quantity, prob_3pct, delta_5m, stop_loss, take_profit):
         print(f"[INFO] Started monitoring trade for {symbol}")
         
 def check_trade_exit(symbol: str, current_price: float) -> bool:
-    """Check if we should exit a trade based on profit target, stop loss, or timeout"""
+    """Check if we should exit a trade based on dynamic limits"""
     if symbol not in active_trades:
         return False
         
@@ -267,21 +376,35 @@ def check_trade_exit(symbol: str, current_price: float) -> bool:
     actual_pnl = calculate_pnl(INVESTMENT_AMOUNT, price_change, BINANCE_FEES_PCT)
     
     timeout_exit = (current_time - trade.timestamp) > TRADE_TIMEOUT
-    profit_target_reached = price_change >= TARGET_PRICE_CHANGE
-    stop_loss_triggered = price_change <= STOP_LOSS_PCT
+    profit_target_reached = current_price >= trade.take_profit
+    stop_loss_triggered = current_price <= trade.stop_loss
+    
     if timeout_exit or profit_target_reached or stop_loss_triggered:
         exit_reason = "Profit Target ✅" if profit_target_reached else (
             "Stop Loss ❌" if stop_loss_triggered else "Timeout ⏰"
         )
         
+        trade_duration = current_time - trade.timestamp
+        
         print(f"\n[TRADE EXIT] {symbol}")
         print(f"Entry Price: {trade.entry_price:.8f}")
         print(f"Exit Price: {current_price:.8f} ({price_change:+.2f}%)")
-        print(f"Time in trade: {current_time - trade.timestamp}")
+        print(f"Time in trade: {trade_duration}")
         print(f"Investment: {INVESTMENT_AMOUNT:.2f} USDT")
         print(f"Final PnL: {actual_pnl:.2f} USDT")
         print(f"Reason: {exit_reason}")
         print(f"Fees paid: {(INVESTMENT_AMOUNT * BINANCE_FEES_PCT * 2):.4f} USDT")
+        
+        # Record trade result
+        record_trade_result(
+            symbol=symbol,
+            entry_price=trade.entry_price,
+            exit_price=current_price,
+            quantity=trade.quantity,
+            pnl=actual_pnl,
+            duration=trade_duration,
+            exit_reason=exit_reason
+        )
         
         # Update trade exit in Supabase
         if trade.trade_id is not None:
@@ -291,8 +414,16 @@ def check_trade_exit(symbol: str, current_price: float) -> bool:
         return True
     return False
 
-def simulate_trade_entry(symbol: str, current_price: float, quantity: float, probability: float, initial_pnl: float):
-    """Simulate entering a trade"""
+def calculate_volume_percentile(volume: float, all_volumes: List[float]) -> float:
+    """Calculate the percentile rank of a volume among all volumes"""
+    if not all_volumes:
+        return 0.0
+    return (sum(1 for v in all_volumes if v <= volume) / len(all_volumes)) * 100
+
+def simulate_trade_entry(symbol: str, current_price: float, quantity: float, probability: float, 
+                        initial_pnl: float, stop_loss: float, take_profit: float, 
+                        volume_percentile: float = 0.0, atr: float = 0.0):
+    """Simulate entering a trade with enhanced parameters"""
     if len(active_trades) >= MAX_ACTIVE_TRADES:
         return False
         
@@ -309,20 +440,74 @@ def simulate_trade_entry(symbol: str, current_price: float, quantity: float, pro
         timestamp=datetime.now(),
         probability=probability,
         initial_pnl=initial_pnl,
-        trade_id=trade_id  # Store the database ID
+        trade_id=trade_id,
+        stop_loss=stop_loss,
+        take_profit=take_profit,
+        volume_percentile=volume_percentile,
+        atr=atr
     )
     active_trades[symbol] = trade
     
     print(f"\n[TRADE ENTRY] {symbol}")
     print(f"Entry Price: {current_price:.8f}")
+    print(f"Stop Loss: {stop_loss:.8f} ({((stop_loss - current_price) / current_price * 100):.2f}%)")
+    print(f"Take Profit: {take_profit:.8f} ({((take_profit - current_price) / current_price * 100):.2f}%)")
     print(f"Quantity: {quantity:.8f}")
     print(f"Initial PnL: {initial_pnl:.2f}%")
     print(f"Probability: {probability:.3f}")
+    print(f"Volume Percentile: {volume_percentile:.1f}")
     if trade_id:
         print(f"Trade ID: {trade_id}")
     return True
 
+def display_performance_stats():
+    """Display current trading performance statistics"""
+    win_rate = trade_stats.get_win_rate()
+    avg_pnl = trade_stats.get_avg_pnl()
+    max_drawdown = trade_stats.get_max_drawdown()
+    
+    # Calculate top performing symbols
+    symbol_pnl = {}
+    for trade in trade_stats.trades:
+        symbol_pnl[trade.symbol] = symbol_pnl.get(trade.symbol, 0) + trade.pnl
+    
+    top_symbols = sorted(symbol_pnl.items(), key=lambda x: x[1], reverse=True)[:3]
+    
+    print("\n=== Performance Dashboard ===")
+    print(f"Win Rate (last {MAX_TRADE_HISTORY} trades): {win_rate:.1%}")
+    print(f"Average PnL: {avg_pnl:.2f} USDT")
+    print(f"Max Drawdown: {max_drawdown:.2f} USDT")
+    print("\nTop Performing Symbols:")
+    for symbol, pnl in top_symbols:
+        print(f"  {symbol}: {pnl:+.2f} USDT")
+    print(f"\nActive Trades: {len(active_trades)}/{MAX_ACTIVE_TRADES}")
+    print(f"Blacklisted Symbols: {len(risk_manager.blacklist)}")
+    print("==========================\n")
+
+def record_trade_result(symbol: str, entry_price: float, exit_price: float, 
+                       quantity: float, pnl: float, duration: timedelta, 
+                       exit_reason: str):
+    """Record a completed trade and update statistics"""
+    trade_result = TradeResult(
+        symbol=symbol,
+        entry_price=entry_price,
+        exit_price=exit_price,
+        quantity=quantity,
+        pnl=pnl,
+        duration=duration,
+        exit_reason=exit_reason,
+        timestamp=datetime.now(timezone.utc)
+    )
+    trade_stats.add_trade(trade_result)
+    
+    # Check if symbol should be blacklisted
+    if risk_manager.should_blacklist(symbol, pnl):
+        print(f"⛔ {symbol} blacklisted for {BLACKLIST_DURATION/60:.0f} minutes due to consecutive losses")
+
 def main():
+    last_stats_display = 0
+    STATS_DISPLAY_INTERVAL = 300  # Show stats every 5 minutes
+    
     # Print spot wallet balance at startup
     print("\n=== Spot Wallet Balance ===")
     balances = get_spot_balance()
@@ -330,6 +515,9 @@ def main():
         for balance in balances:
             print(f"{balance['asset']}: Free={balance['free']:.8f}, Locked={balance['locked']:.8f}, Total={balance['total']:.8f}")
     print("=========================\n")
+    
+    # Display initial performance dashboard
+    display_performance_stats()
     
     while True:
         df = fetch_usdt_tickers()
@@ -358,21 +546,36 @@ def main():
             pnl = calculate_pnl(INVESTMENT_AMOUNT, delta_15m, BINANCE_FEES_PCT)            # Print market data
             if pnl > 0:
                 print(f"📈 {symbol}: ∆15m={delta_15m}%, ∆5m={delta_5m}%, Prob≥3%={prob_3pct}, Vol={row['quoteVolume']:.2f}, "
-                      f"PnL={pnl:.2f} USDT, Price={current_price}, Range=({lower_price} - {upper_price})")
-
+                      f"PnL={pnl:.2f} USDT, Price={current_price}, Range=({lower_price} - {upper_price})")            # Calculate volume percentile for this symbol
+            volume_percentile = calculate_volume_percentile(
+                row['quoteVolume'],
+                filtered_df['quoteVolume'].tolist()
+            )
+            
+            # Use ATR from probability calculation
+            _, _, upper_price, lower_price = estimate_prob_3pct_jump_and_price(symbol)
+            atr = upper_price - lower_price if upper_price and lower_price else 0.0
+            
             # Check existing trades
             if symbol in active_trades:
                 check_trade_exit(symbol, current_price)
             # Evaluate new trading opportunities
             elif pnl > 0:
-                evaluate_trading_opportunity(symbol, delta_15m, delta_5m, prob_3pct, current_price, pnl)            # Save to database
+                evaluate_trading_opportunity(
+                    symbol, delta_15m, delta_5m, prob_3pct, 
+                    current_price, pnl, volume_percentile, atr
+                )
             save_to_supabase(pd.DataFrame([{
                 'symbol': symbol,
                 'priceChangePercent': delta_15m,
                 'quoteVolume': row['quoteVolume'],
                 'timestamp': datetime.now(timezone.utc).isoformat()
-            }]))
-
+            }]))        # Display performance stats periodically
+        current_time = time.time()
+        if current_time - last_stats_display >= STATS_DISPLAY_INTERVAL:
+            display_performance_stats()
+            last_stats_display = current_time
+        
         # Sleep briefly between iterations
         time.sleep(1)
 
