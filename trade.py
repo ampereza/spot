@@ -1,20 +1,28 @@
 import pandas as pd
 import requests
+import hmac
+import hashlib
 from datetime import datetime, timezone
 from supabase import create_client, Client
 import os
 import time
 from dotenv import load_dotenv
+from typing import List, Dict
 
 # Load environment variables
 load_dotenv()
 
-# Supabase setup
+# Binance and Supabase setup
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_ANON_KEY")
+BINANCE_API_KEY = os.getenv("APIKey")
+BINANCE_API_SECRET = os.getenv("secretKey")
 
 if not SUPABASE_URL or not SUPABASE_KEY:
     raise ValueError("SUPABASE_URL and SUPABASE_ANON_KEY environment variables must be set")
+
+if not BINANCE_API_KEY or not BINANCE_API_SECRET:
+    raise ValueError("BINANCE_API_KEY and BINANCE_API_SECRET environment variables must be set")
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
@@ -141,7 +149,59 @@ def estimate_prob_3pct_jump_and_price(symbol):
         print(f"[ERROR] Failed to estimate 3% jump probability for {symbol}: {e}")
         return 0.0, 0.0, 0.0, 0.0
 
+def get_spot_balance():
+    try:
+        timestamp = int(time.time() * 1000)
+        params = {
+            'timestamp': timestamp
+        }
+        query_string = '&'.join([f"{k}={v}" for k, v in params.items()])
+        signature = hmac.new(
+            BINANCE_API_SECRET.encode('utf-8'),
+            query_string.encode('utf-8'),
+            hashlib.sha256
+        ).hexdigest()
+        
+        url = 'https://api.binance.com/api/v3/account'
+        headers = {
+            'X-MBX-APIKEY': BINANCE_API_KEY
+        }
+        params['signature'] = signature
+        
+        response = requests.get(url, headers=headers, params=params)
+        response.raise_for_status()
+        account_info = response.json()
+        
+        # Filter non-zero balances and format them
+        balances = []
+        for asset in account_info['balances']:
+            free = float(asset['free'])
+            locked = float(asset['locked'])
+            total = free + locked
+            if total > 0:
+                balances.append({
+                    'asset': asset['asset'],
+                    'free': free,
+                    'locked': locked,
+                    'total': total
+                })
+        
+        # Sort by total value
+        balances.sort(key=lambda x: x['total'], reverse=True)
+        return balances
+    except Exception as e:
+        print(f"[ERROR] Failed to fetch spot balance: {e}")
+        return []
+
 def main():
+    # Print spot wallet balance at startup
+    print("\n=== Spot Wallet Balance ===")
+    balances = get_spot_balance()
+    if balances:
+        for balance in balances:
+            print(f"{balance['asset']}: Free={balance['free']:.8f}, Locked={balance['locked']:.8f}, Total={balance['total']:.8f}")
+    print("=========================\n")
+    
     while True:
         df = fetch_usdt_tickers()
         if df.empty:
