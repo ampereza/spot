@@ -41,7 +41,7 @@ active_trades = {}
 TRADE_TIMEOUT = timedelta(minutes=30)
 TARGET_PRICE_CHANGE = 0.35  # Target 0.35% price change for taking profits
 LIVE_PRICE_CHANGE_MIN = 0.1  # Minimum 0.5% live price change to consider entry
-STOP_LOSS_PCT = -10.0  # Stop loss at 10% loss
+STOP_LOSS_PCT = -1.0  # Stop loss at 1% loss
 MIN_PRICE_CHANGE = 0.05  # Minimum price movement to consider entry
 MAX_ACTIVE_TRADES = 3
 HIGH_PROB_THRESHOLD = 0.5  # 50% probability threshold for high probability trades
@@ -355,14 +355,19 @@ def evaluate_trading_opportunity(symbol: str, delta_15m: float, delta_5m: float,
         print(f"[INFO] Started monitoring trade for {symbol}")
 
 def check_trade_exit(symbol: str, current_price: float) -> bool:
-    """Check if we should exit a trade based on profit target, stop loss, or timeout"""
+    """Check if we should exit a trade based on real-time price"""
     if symbol not in active_trades:
         return False
         
     trade = active_trades[symbol]
     current_time = datetime.now(timezone.utc)
     
-    # Skip if current_price is invalid
+    # Get real-time price from price tracker - prioritize real-time price
+    realtime_price = price_tracker.get_price(symbol)
+    if realtime_price:  # Use real-time price if available
+        current_price = realtime_price
+    
+    # Skip if price is invalid
     if not current_price or current_price <= 0:
         print(f"[WARNING] Invalid exit price for {symbol}: {current_price}")
         return False
@@ -370,9 +375,13 @@ def check_trade_exit(symbol: str, current_price: float) -> bool:
     price_change = ((current_price - trade.entry_price) / trade.entry_price) * 100
     actual_pnl = calculate_pnl(INVESTMENT_AMOUNT, price_change, BINANCE_FEES_PCT)
     
+    # Quick exit conditions - Exit immediately if price is at or above entry
+    quick_exit = current_price >= trade.entry_price  # Immediate exit on breakeven or profit
     timeout_exit = (current_time - trade.timestamp) > TRADE_TIMEOUT
-    profit_target_reached = price_change >= TARGET_PRICE_CHANGE
-    stop_loss_triggered = price_change <= STOP_LOSS_PCT
+    stop_loss_triggered = price_change <= STOP_LOSS_PCT  # Keep stop loss for protection
+    
+    # Prioritize quick exit if price is favorable
+    if quick_exit:
     
     if timeout_exit or profit_target_reached or stop_loss_triggered:
         if profit_target_reached:
