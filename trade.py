@@ -32,7 +32,7 @@ BINANCE_URL = "https://api.binance.com/api/v3/ticker/24hr"
 
 # Constants
 INVESTMENT_AMOUNT = 100
-BINANCE_FEES_PCT = 0.001
+BINANCE_FEES_PCT = 0.00075  # 0.075% when paying with BNB
 SYMBOL_TTL = 30  # Reduced to check more frequently
 recent_symbols = {}
 
@@ -88,7 +88,9 @@ def save_to_supabase(df):
 
 def calculate_pnl(investment, price_change_pct, fees_pct):
     gross_return = investment * (price_change_pct / 100)
-    net_return = gross_return * (1 - fees_pct * 2)
+    trading_fees = investment * fees_pct * 2  # Entry and exit fees (0.075% * 2 = 0.15% total)
+    trend_fee = investment * 0.001  # 0.1% trend fee
+    net_return = gross_return - trading_fees - trend_fee
     return round(net_return, 2)
 
 def fetch_15m_price_change(symbol):
@@ -229,13 +231,14 @@ def save_trade_entry(symbol: str, buy_price: float, quantity: float) -> Optional
         print(f"[ERROR] Failed to save trade entry to Supabase: {e}")
         return None
 
-def update_trade_exit(trade_id: int, sell_price: float, profit_loss: float):
-    """Update trade in Supabase with exit information"""
+def update_trade_exit(trade_id: int, sell_price: float, profit_loss: float, exit_reason: str):
+    """Update trade in Supabase with exit information including reason"""
     try:
         data = {
             "sell_price": sell_price,
             "sell_time": datetime.now(timezone.utc).isoformat(),
-            "profit_loss": profit_loss
+            "profit_loss": profit_loss,
+            "reason": exit_reason
         }
         supabase.table("trades").update(data).eq("id", trade_id).execute()
     except Exception as e:
@@ -382,9 +385,9 @@ def check_trade_exit(symbol: str, current_price: float) -> bool:
         print(f"Reason: {exit_reason}")
         print(f"Fees paid: {(INVESTMENT_AMOUNT * BINANCE_FEES_PCT * 2):.4f} USDT")
         
-        # Update trade exit in Supabase
+        # Update trade exit in Supabase with reason
         if trade.trade_id is not None:
-            update_trade_exit(trade.trade_id, current_price, actual_pnl)
+            update_trade_exit(trade.trade_id, current_price, actual_pnl, exit_reason)
         
         del active_trades[symbol]
         return True
