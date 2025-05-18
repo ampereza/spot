@@ -39,9 +39,11 @@ recent_symbols = {}
 # Global variables for trade tracking
 active_trades = {}
 TRADE_TIMEOUT = timedelta(minutes=100)  # Increased timeout for longer trades
-TARGET_PRICE_CHANGE = 0.3  # Target 0.3% price change
+TARGET_PRICE_CHANGE = 0.5  # Target 0.5% price change
+STOP_LOSS_PCT = -5.0  # Stop loss at 5% loss
 MIN_PRICE_CHANGE = 0.05  # Minimum price movement to consider entry
 MAX_ACTIVE_TRADES = 3
+HIGH_PROB_THRESHOLD = 0.5  # 50% probability threshold for high probability trades
 
 def fetch_usdt_tickers():
     try:
@@ -259,9 +261,37 @@ def fetch_active_trades_from_db():
         print(f"[ERROR] Failed to fetch active trades from database: {e}")
         return {}
 
+def get_current_probability(symbol: str) -> float:
+    """Get current probability for a symbol"""
+    prob, _, _, _ = estimate_prob_3pct_jump_and_price(symbol)
+    return prob
+
+def force_exit_lowest_probability_trade() -> bool:
+    """Force exit the trade with lowest current probability"""
+    if not active_trades:
+        return False
+        
+    lowest_prob_symbol = None
+    lowest_prob = float('inf')
+    
+    # Find trade with lowest current probability
+    for symbol in active_trades:
+        current_prob = get_current_probability(symbol)
+        if current_prob < lowest_prob:
+            lowest_prob = current_prob
+            lowest_prob_symbol = symbol
+    
+    if lowest_prob_symbol and lowest_prob < HIGH_PROB_THRESHOLD:
+        # Get current price for exit
+        _, current_price, _, _ = estimate_prob_3pct_jump_and_price(lowest_prob_symbol)
+        if current_price > 0:
+            print(f"[TRADE REPLACEMENT] Exiting low probability trade {lowest_prob_symbol} (prob={lowest_prob:.2f})")
+            return check_trade_exit(lowest_prob_symbol, current_price)
+    return False
+
 def evaluate_trading_opportunity(symbol: str, delta_15m: float, delta_5m: float, prob_3pct: float, 
                                current_price: float, pnl: float):
-    """Evaluate if we should enter a trade based on price movements"""
+    """Evaluate if we should enter a trade based on price movements and probability"""
     # Validate current price
     if not current_price or current_price <= 0:
         print(f"[WARNING] Invalid price for {symbol}: {current_price}")
@@ -271,6 +301,18 @@ def evaluate_trading_opportunity(symbol: str, delta_15m: float, delta_5m: float,
     if delta_5m < MIN_PRICE_CHANGE:
         return
 
+    # If this is a high probability trade and we're at max capacity
+    if prob_3pct >= HIGH_PROB_THRESHOLD and len(active_trades) >= MAX_ACTIVE_TRADES:
+        # Try to exit a lower probability trade
+        if force_exit_lowest_probability_trade():
+            print(f"[HIGH PROBABILITY] Made room for high probability trade {symbol}")
+        else:
+            return
+
+    # Skip if we already have maximum trades and this is not a high probability trade
+    if len(active_trades) >= MAX_ACTIVE_TRADES and prob_3pct < HIGH_PROB_THRESHOLD:
+        return
+        
     # Check if trade exists in database but not in memory
     try:
         result = supabase.table("trades").select("*").eq("symbol", symbol).is_("sell_time", "null").execute()
@@ -294,17 +336,22 @@ def evaluate_trading_opportunity(symbol: str, delta_15m: float, delta_5m: float,
     # Calculate quantity based on investment amount
     quantity = INVESTMENT_AMOUNT / current_price
     
-    # If criteria met, simulate trade entry with 5m change as initial_pnl
+    # Higher investment for high probability trades
+    if prob_3pct >= HIGH_PROB_THRESHOLD:
+        quantity *= 1.5  # Increase position size by 50% for high probability trades
+        print(f"[HIGH PROBABILITY] Found high probability trade for {symbol} (prob={prob_3pct:.2f})")
+    
+    # If criteria met, simulate trade entry
     if simulate_trade_entry(symbol, current_price, quantity, prob_3pct, delta_5m):
         print(f"[INFO] Started monitoring trade for {symbol}")
 
 def check_trade_exit(symbol: str, current_price: float) -> bool:
-    """Check if we should exit a trade based on profit target or timeout"""
+    """Check if we should exit a trade based on profit target, stop loss, or timeout"""
     if symbol not in active_trades:
         return False
         
     trade = active_trades[symbol]
-    current_time = datetime.now(timezone.utc)  # Make timezone-aware
+    current_time = datetime.now(timezone.utc)
     
     # Skip if current_price is invalid
     if not current_price or current_price <= 0:
@@ -316,9 +363,15 @@ def check_trade_exit(symbol: str, current_price: float) -> bool:
     
     timeout_exit = (current_time - trade.timestamp) > TRADE_TIMEOUT
     profit_target_reached = price_change >= TARGET_PRICE_CHANGE
+    stop_loss_triggered = price_change <= STOP_LOSS_PCT
     
-    if timeout_exit or profit_target_reached:
-        exit_reason = "Profit Target ✅" if profit_target_reached else "Timeout ⏰"
+    if timeout_exit or profit_target_reached or stop_loss_triggered:
+        if profit_target_reached:
+            exit_reason = "Profit Target ✅"
+        elif stop_loss_triggered:
+            exit_reason = "Stop Loss ⛔"
+        else:
+            exit_reason = "Timeout ⏰"
         
         print(f"\n[TRADE EXIT] {symbol}")
         print(f"Entry Price: {trade.entry_price:.8f}")
@@ -397,9 +450,16 @@ def main():
             continue
 
         scored_df = calculate_score(df)
-        filtered_df = scored_df.head(10)
+        # Create an explicit copy of the DataFrame
+        filtered_df = scored_df.head(10).copy()
         now = time.time()
 
+        # Add probability column and sort
+        filtered_df.loc[:, 'probability'] = filtered_df['symbol'].apply(
+            lambda x: estimate_prob_3pct_jump_and_price(x)[0]
+        )
+        filtered_df = filtered_df.sort_values('probability', ascending=False)
+        
         for _, row in filtered_df.iterrows():
             symbol = row['symbol']
             if symbol in recent_symbols and (now - recent_symbols[symbol]) < SYMBOL_TTL:
