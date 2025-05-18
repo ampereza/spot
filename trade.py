@@ -31,22 +31,28 @@ supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 BINANCE_URL = "https://api.binance.com/api/v3/ticker/24hr"
 
 # Constants
-INVESTMENT_AMOUNT = 100
+INITIAL_INVESTMENT = 100  # Initial investment amount
 BINANCE_FEES_PCT = 0.00075  # 0.075% when paying with BNB
-SYMBOL_TTL = 30  # Reduced to check more frequently
-recent_symbols = {}
+SYMBOL_TTL = 5  # Reduced to check more frequently (5 seconds)
+DEBUG_MODE = True  # Enable debug logging
 
 # Global variables for trade tracking
 active_trades = {}
-TRADE_TIMEOUT = timedelta(minutes=100)  # Increased timeout for longer trades
-TARGET_PRICE_CHANGE = 0.5  # Target 0.5% price change
-STOP_LOSS_PCT = -5.0  # Stop loss at 5% loss
+TRADE_TIMEOUT = timedelta(minutes=30)
+TARGET_PRICE_CHANGE = 0.35  # Target 0.35% price change for taking profits
+LIVE_PRICE_CHANGE_MIN = 0.1  # Minimum 0.5% live price change to consider entry
+STOP_LOSS_PCT = -1.0  # Stop loss at 1% loss
 MIN_PRICE_CHANGE = 0.05  # Minimum price movement to consider entry
 MAX_ACTIVE_TRADES = 3
 HIGH_PROB_THRESHOLD = 0.5  # 50% probability threshold for high probability trades
 
+def log_debug(msg: str):
+    if DEBUG_MODE:
+        print(f"[DEBUG] {msg}")
+
 def fetch_usdt_tickers():
     try:
+        log_debug("Fetching USDT tickers...")
         response = requests.get(BINANCE_URL)
         response.raise_for_status()
         data = pd.DataFrame(response.json())
@@ -426,7 +432,126 @@ def simulate_trade_entry(symbol: str, current_price: float, quantity: float, pro
     
     return True
 
+def fetch_price_changes(symbol: str) -> Dict[str, float]:
+    """Fetch price changes for multiple timeframes"""
+    timeframes = {
+        '24h': {'interval': '1d', 'limit': 2},
+        '6h': {'interval': '6h', 'limit': 2},
+        '1h': {'interval': '1h', 'limit': 2},
+        '30m': {'interval': '30m', 'limit': 2},
+        '15m': {'interval': '15m', 'limit': 2},
+        '5m': {'interval': '5m', 'limit': 2},
+        'live': {'interval': '1m', 'limit': 1}
+    }
+    
+    changes = {}
+    
+    for tf, params in timeframes.items():
+        try:
+            endpoint = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={params['interval']}&limit={params['limit']}"
+            response = requests.get(endpoint)
+            response.raise_for_status()
+            data = response.json()
+            
+            if tf == 'live' and len(data) >= 1:
+                # For live price, compare open and current price of the current candle
+                open_price = float(data[0][1])
+                current_price = float(data[0][4])
+                changes[tf] = round(((current_price - open_price) / open_price) * 100, 2)
+            elif len(data) >= 2:
+                # For other timeframes, compare previous close with current close
+                old_price = float(data[0][4])
+                new_price = float(data[1][4])
+                changes[tf] = round(((new_price - old_price) / old_price) * 100, 2)
+            else:
+                changes[tf] = 0.0
+                
+        except Exception as e:
+            print(f"[ERROR] Failed to fetch {tf} price change for {symbol}: {e}")
+            changes[tf] = 0.0
+    
+    return changes
+
+def get_total_capital():
+    """Calculate total capital based on initial investment plus profits/losses"""
+    try:
+        # Query all completed trades
+        result = supabase.table("trades").select("profit_loss").not_.is_("sell_time", "null").execute()
+        if result.data:
+            total_pnl = sum(trade['profit_loss'] or 0 for trade in result.data)  # Handle None values
+            total_capital = INITIAL_INVESTMENT + total_pnl
+            # Set investment amount to 95% of total capital
+            return round(total_capital * 0.95, 2)
+        return INITIAL_INVESTMENT  # Return initial investment if no trades found
+    except Exception as e:
+        print(f"[ERROR] Failed to calculate total capital: {e}")
+        return INITIAL_INVESTMENT
+
+def get_trading_stats(days: int = 7):
+    """Get trading statistics for the specified number of days"""
+    try:
+        # Calculate the start date
+        start_date = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+        
+        # Query completed trades within the time period
+        result = supabase.table("trades").select("*").gte("sell_time", start_date).execute()
+        
+        if not result.data:
+            return {
+                'total_trades': 0,
+                'winning_trades': 0,
+                'win_rate': 0,
+                'total_pnl': 0,
+                'avg_profit_per_trade': 0
+            }
+        
+        trades = result.data
+        winning_trades = sum(1 for t in trades if t['profit_loss'] and t['profit_loss'] > 0)
+        total_pnl = sum(t['profit_loss'] or 0 for t in trades)
+        
+        stats = {
+            'total_trades': len(trades),
+            'winning_trades': winning_trades,
+            'win_rate': round(winning_trades / len(trades) * 100, 2),
+            'total_pnl': round(total_pnl, 2),
+            'avg_profit_per_trade': round(total_pnl / len(trades), 2)
+        }
+        return stats
+    except Exception as e:
+        print(f"[ERROR] Failed to calculate trading stats: {e}")
+        return None
+
+def get_dynamic_position_size(current_capital: float, symbol: str) -> float:
+    """Calculate position size based on win rate and volatility"""
+    try:
+        # Get recent trading performance
+        stats = get_trading_stats(7)  # Last 7 days
+        if not stats:
+            return current_capital * 0.95  # Default to 95% if no stats
+        
+        # Base position size on win rate
+        if stats['win_rate'] >= 60:
+            position_size = current_capital * 0.95  # More aggressive when win rate is high
+        elif stats['win_rate'] >= 50:
+            position_size = current_capital * 0.80  # Moderate when win rate is decent
+        else:
+            position_size = current_capital * 0.60  # Conservative when win rate is low
+        
+        # Adjust for recent performance trend
+        if stats['total_pnl'] < 0:
+            position_size *= 0.8  # Reduce position size after losses
+        
+        # Round to 2 decimal places
+        return round(position_size, 2)
+    except Exception as e:
+        print(f"[ERROR] Failed to calculate dynamic position size: {e}")
+        return current_capital * 0.95  # Default to 95% if error
+
 def main():
+    print("\n=== Trading Bot Started ===")
+    print("Monitoring market for opportunities...")
+    print("Press Ctrl+C to exit\n")
+    
     # Load existing trades from database
     print("\n=== Loading Existing Trades ===")
     recovered_trades = fetch_active_trades_from_db()
@@ -437,12 +562,28 @@ def main():
             print(f"- {symbol}: Entry Price={trade.entry_price}, Quantity={trade.quantity}")
     print("============================\n")
 
-    # Print spot wallet balance at startup
+    # Print spot wallet balance and performance stats
     print("\n=== Spot Wallet Balance ===")
     balances = get_spot_balance()
     if balances:
         for balance in balances:
             print(f"{balance['asset']}: Free={balance['free']:.8f}, Locked={balance['locked']:.8f}, Total={balance['total']:.8f}")
+    
+    # Calculate and display performance statistics
+    stats = get_trading_stats(7)  # Get last 7 days stats
+    if stats:
+        print("\n=== Trading Statistics (7 Days) ===")
+        print(f"Total Trades: {stats['total_trades']}")
+        print(f"Win Rate: {stats['win_rate']}%")
+        print(f"Total PnL: {stats['total_pnl']:.2f} USDT")
+        print(f"Avg Profit/Trade: {stats['avg_profit_per_trade']:.2f} USDT")
+      # Update investment amount based on total capital
+    global INVESTMENT_AMOUNT
+    total_capital = get_total_capital()
+    INVESTMENT_AMOUNT = get_dynamic_position_size(total_capital, "GENERAL")
+    print(f"\nInitial Capital: {INITIAL_INVESTMENT:.2f} USDT")
+    print(f"Current Total Capital: {total_capital:.2f} USDT")
+    print(f"Current Position Size: {INVESTMENT_AMOUNT:.2f} USDT")
     print("=========================\n")
     
     while True:
@@ -469,33 +610,39 @@ def main():
                 continue
 
             recent_symbols[symbol] = now
-            delta_15m = fetch_15m_price_change(symbol)
-            delta_5m = fetch_5m_price_change(symbol)
+            price_changes = fetch_price_changes(symbol)
             prob_3pct, current_price, upper_price, lower_price = estimate_prob_3pct_jump_and_price(symbol)
 
-            if delta_15m == 0.0 or delta_5m == 0.0:
+            if all(v == 0.0 for v in price_changes.values()):
                 continue
 
-            pnl = calculate_pnl(INVESTMENT_AMOUNT, delta_15m, BINANCE_FEES_PCT)            # Print market data
+            # Only process symbols with live price change greater than our target
+            if price_changes['live'] < TARGET_PRICE_CHANGE:
+                continue
+
+            pnl = calculate_pnl(INVESTMENT_AMOUNT, price_changes['15m'], BINANCE_FEES_PCT)
             if pnl > 0:
-                print(f"📈 {symbol}: ∆15m={delta_15m}%, ∆5m={delta_5m}%, Prob≥3%={prob_3pct}, Vol={row['quoteVolume']:.2f}, "
-                      f"PnL={pnl:.2f} USDT, Price={current_price}, Range=({lower_price} - {upper_price})")
+                print(f"📈 {symbol}:")
+                print(f"  24h: {price_changes['24h']:+.2f}% | 6h: {price_changes['6h']:+.2f}% | 1h: {price_changes['1h']:+.2f}%")
+                print(f"  30m: {price_changes['30m']:+.2f}% | 15m: {price_changes['15m']:+.2f}% | 5m: {price_changes['5m']:+.2f}%")
+                print(f"  Live: {price_changes['live']:+.2f}% | Prob≥3%: {prob_3pct}")
+                print(f"  Vol={row['quoteVolume']:.2f}, PnL={pnl:.2f} USDT")
+                print(f"  Price={current_price}, Range=({lower_price} - {upper_price})")
 
             # Check existing trades
             if symbol in active_trades:
                 check_trade_exit(symbol, current_price)
             # Evaluate new trading opportunities
             elif pnl > 0:
-                evaluate_trading_opportunity(symbol, delta_15m, delta_5m, prob_3pct, current_price, pnl)            # Save to database
-            save_to_supabase(pd.DataFrame([{
-                'symbol': symbol,
-                'priceChangePercent': delta_15m,
-                'quoteVolume': row['quoteVolume'],
-                'timestamp': datetime.now(timezone.utc).isoformat()
-            }]))
-
-        # Sleep briefly between iterations
-        time.sleep(1)
+                evaluate_trading_opportunity(symbol, price_changes['15m'], price_changes['5m'], 
+                                          prob_3pct, current_price, pnl)
 
 if __name__ == "__main__":
-    main()
+    # Initialize the recent_symbols dictionary
+    recent_symbols = {}
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("\n\nBot stopped by user.")
+    except Exception as e:
+        print(f"\n\nBot stopped due to error: {e}")
