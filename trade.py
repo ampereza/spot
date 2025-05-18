@@ -239,14 +239,57 @@ def update_trade_exit(trade_id: int, sell_price: float, profit_loss: float):
     except Exception as e:
         print(f"[ERROR] Failed to update trade exit in Supabase: {e}")
 
-# Removed duplicate trade functions as we're using simulate_trade_entry and check_trade_exit instead
+def fetch_active_trades_from_db():
+    """Fetch active trades from database that haven't been closed"""
+    try:
+        result = supabase.table("trades").select("*").is_("sell_time", "null").execute()
+        recovered_trades = {}
+        for trade in result.data:
+            recovered_trades[trade['symbol']] = SimulatedTrade(
+                symbol=trade['symbol'],
+                entry_price=trade['buy_price'],
+                quantity=trade['quantity'],
+                timestamp=datetime.fromisoformat(trade['buy_time'].replace('Z', '+00:00')),
+                probability=0.0,  # Default value since we don't store this
+                initial_pnl=0.0,  # Default value since we don't store this
+                trade_id=trade['id']
+            )
+        return recovered_trades
+    except Exception as e:
+        print(f"[ERROR] Failed to fetch active trades from database: {e}")
+        return {}
 
 def evaluate_trading_opportunity(symbol: str, delta_15m: float, delta_5m: float, prob_3pct: float, 
                                current_price: float, pnl: float):
     """Evaluate if we should enter a trade based on price movements"""
+    # Validate current price
+    if not current_price or current_price <= 0:
+        print(f"[WARNING] Invalid price for {symbol}: {current_price}")
+        return
+        
     # Check for minimum price movement in last 5 minutes
     if delta_5m < MIN_PRICE_CHANGE:
         return
+
+    # Check if trade exists in database but not in memory
+    try:
+        result = supabase.table("trades").select("*").eq("symbol", symbol).is_("sell_time", "null").execute()
+        if result.data:
+            trade_data = result.data[0]
+            # Recover trade to memory if found
+            active_trades[symbol] = SimulatedTrade(
+                symbol=symbol,
+                entry_price=trade_data['buy_price'],
+                quantity=trade_data['quantity'],
+                timestamp=datetime.fromisoformat(trade_data['buy_time'].replace('Z', '+00:00')),
+                probability=0.0,
+                initial_pnl=0.0,
+                trade_id=trade_data['id']
+            )
+            print(f"[INFO] Recovered existing trade for {symbol} from database")
+            return
+    except Exception as e:
+        print(f"[ERROR] Failed to check existing trade in database: {e}")
         
     # Calculate quantity based on investment amount
     quantity = INVESTMENT_AMOUNT / current_price
@@ -254,14 +297,20 @@ def evaluate_trading_opportunity(symbol: str, delta_15m: float, delta_5m: float,
     # If criteria met, simulate trade entry with 5m change as initial_pnl
     if simulate_trade_entry(symbol, current_price, quantity, prob_3pct, delta_5m):
         print(f"[INFO] Started monitoring trade for {symbol}")
-        
+
 def check_trade_exit(symbol: str, current_price: float) -> bool:
     """Check if we should exit a trade based on profit target or timeout"""
     if symbol not in active_trades:
         return False
         
     trade = active_trades[symbol]
-    current_time = datetime.now()
+    current_time = datetime.now(timezone.utc)  # Make timezone-aware
+    
+    # Skip if current_price is invalid
+    if not current_price or current_price <= 0:
+        print(f"[WARNING] Invalid exit price for {symbol}: {current_price}")
+        return False
+    
     price_change = ((current_price - trade.entry_price) / trade.entry_price) * 100
     actual_pnl = calculate_pnl(INVESTMENT_AMOUNT, price_change, BINANCE_FEES_PCT)
     
@@ -303,23 +352,35 @@ def simulate_trade_entry(symbol: str, current_price: float, quantity: float, pro
         symbol=symbol,
         entry_price=current_price,
         quantity=quantity,
-        timestamp=datetime.now(),
+        timestamp=datetime.now(timezone.utc),  # Make timezone-aware
         probability=probability,
         initial_pnl=initial_pnl,
-        trade_id=trade_id  # Store the database ID
+        trade_id=trade_id
     )
     active_trades[symbol] = trade
     
-    print(f"\n[TRADE ENTRY] {symbol}")
+    # Log the simulated trade entry
+    print(f"[TRADE ENTRY] {symbol}")
     print(f"Entry Price: {current_price:.8f}")
-    print(f"Quantity: {quantity:.8f}")
-    print(f"Initial PnL: {initial_pnl:.2f}%")
-    print(f"Probability: {probability:.3f}")
-    if trade_id:
-        print(f"Trade ID: {trade_id}")
+    print(f"Quantity: {quantity:.4f}")
+    print(f"Probability of 3% jump: {probability:.2f}%")
+    print(f"Initial PnL (5m change): {initial_pnl:.2f} USDT")
+    print(f"Trade ID: {trade_id}")
+    print("===============================")
+    
     return True
 
 def main():
+    # Load existing trades from database
+    print("\n=== Loading Existing Trades ===")
+    recovered_trades = fetch_active_trades_from_db()
+    active_trades.update(recovered_trades)
+    if recovered_trades:
+        print(f"Recovered {len(recovered_trades)} active trades from database")
+        for symbol, trade in recovered_trades.items():
+            print(f"- {symbol}: Entry Price={trade.entry_price}, Quantity={trade.quantity}")
+    print("============================\n")
+
     # Print spot wallet balance at startup
     print("\n=== Spot Wallet Balance ===")
     balances = get_spot_balance()
