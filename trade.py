@@ -564,12 +564,12 @@ def calculate_compound_growth(initial_capital: float = INITIAL_INVESTMENT, trade
         daily_return_pct = ((daily_growth - initial_capital) / initial_capital) * 100
         
         # Weekly compound calculation (5 trading days)
-        weekly_trades = daily_trades * 5
+        weekly_trades = daily_trades * 7
         weekly_growth = initial_capital * pow((1 + avg_profit_pct/100), weekly_trades)
         weekly_return_pct = ((weekly_growth - initial_capital) / initial_capital) * 100
         
         # Monthly compound calculation (21 trading days)
-        monthly_trades = daily_trades * 21
+        monthly_trades = daily_trades * 30
         monthly_growth = initial_capital * pow((1 + avg_profit_pct/100), monthly_trades)
         monthly_return_pct = ((monthly_growth - initial_capital) / initial_capital) * 100
         
@@ -594,6 +594,62 @@ def calculate_compound_growth(initial_capital: float = INITIAL_INVESTMENT, trade
     except Exception as e:
         print(f"[ERROR] Failed to calculate compound growth: {e}")
         return None
+
+def generate_daily_report():
+    """Generate a daily trading report and save it to a file"""
+    try:
+        # Get today's date in UTC
+        today = datetime.now(timezone.utc).date()
+        report_filename = f"report_{today.strftime('%Y_%m_%d')}.txt"
+        
+        # Get today's trades
+        start_date = datetime.combine(today, datetime.min.time()).replace(tzinfo=timezone.utc).isoformat()
+        end_date = datetime.combine(today, datetime.max.time()).replace(tzinfo=timezone.utc).isoformat()
+        
+        result = supabase.table("trades").select("*").gte("buy_time", start_date).lte("buy_time", end_date).execute()
+        
+        # Get opening capital (total capital at start of day)
+        opening_capital = get_total_capital()
+        
+        if result.data:
+            trades = result.data
+            total_trades = len(trades)
+            completed_trades = [t for t in trades if t['sell_time'] is not None]
+            total_pnl = sum(t['profit_loss'] or 0 for t in completed_trades)
+            avg_pnl = total_pnl / len(completed_trades) if completed_trades else 0
+            
+            # Generate report content
+            report_content = f"=== Daily Trading Report {today.strftime('%Y-%m-%d')} ===\n\n"
+            report_content += f"Opening Capital: {opening_capital:.2f} USDT\n"
+            report_content += f"Total Trades: {total_trades}\n"
+            report_content += f"Completed Trades: {len(completed_trades)}\n"
+            report_content += f"Total PnL: {total_pnl:.2f} USDT\n"
+            report_content += f"Average PnL per Trade: {avg_pnl:.2f} USDT\n\n"
+            
+            report_content += "=== Trade Details ===\n\n"
+            for trade in trades:
+                status = "CLOSED" if trade['sell_time'] else "OPEN"
+                pnl = trade['profit_loss'] if trade['profit_loss'] else "N/A"
+                report_content += f"Trade ID: {trade['id']}\n"
+                report_content += f"Symbol: {trade['symbol']}\n"
+                report_content += f"Entry: {trade['buy_price']:.8f}\n"
+                report_content += f"Exit: {trade['sell_price']:.8f if trade['sell_price'] else 'N/A'}\n"
+                report_content += f"Status: {status}\n"
+                report_content += f"PnL: {pnl}\n"
+                report_content += "-------------------------\n"
+        else:
+            report_content = f"=== Daily Trading Report {today.strftime('%Y-%m-%d')} ===\n\n"
+            report_content += f"Opening Capital: {opening_capital:.2f} USDT\n"
+            report_content += "No trades executed today.\n"
+        
+        # Save report to file
+        with open(report_filename, 'w') as f:
+            f.write(report_content)
+        
+        print(f"\n[INFO] Daily report saved to {report_filename}")
+        
+    except Exception as e:
+        print(f"[ERROR] Failed to generate daily report: {e}")
 
 def main():
     print("\n=== Trading Bot Started ===")
@@ -711,5 +767,7 @@ if __name__ == "__main__":
         main()
     except KeyboardInterrupt:
         print("\n\nBot stopped by user.")
+        generate_daily_report()  # Generate report when bot is stopped
     except Exception as e:
         print(f"\n\nBot stopped due to error: {e}")
+        generate_daily_report()  # Generate report even if bot crashes
