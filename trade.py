@@ -79,19 +79,6 @@ def calculate_score(df):
     )
     return df[['symbol', 'priceChangePercent', 'quoteVolume', 'composite_score', 'timestamp']].sort_values(by='composite_score', ascending=False)
 
-def save_to_supabase(df):
-    for _, row in df.iterrows():
-        data = {
-            "symbol": row['symbol'],
-            "price_change_pct": row['priceChangePercent'],
-            "quote_volume": row['quoteVolume'],
-            "timestamp": row['timestamp']
-        }
-        try:
-            supabase.table("market_signals").insert(data).execute()
-        except Exception as e:
-            print(f"[ERROR] Supabase insert failed: {e}")
-
 def calculate_pnl(investment, price_change_pct, fees_pct):
     gross_return = investment * (price_change_pct / 100)
     trading_fees = investment * fees_pct * 2  # Entry and exit fees (0.075% * 2 = 0.15% total)
@@ -710,7 +697,8 @@ def main():
     if balances:
         for balance in balances:
             print(f"{balance['asset']}: Free={balance['free']:.8f}, Locked={balance['locked']:.8f}, Total={balance['total']:.8f}")
-      # Calculate and display performance statistics
+
+    # Calculate and display performance statistics
     stats = get_trading_stats(7)  # Get last 7 days stats
     if stats:
         print("\n=== Trading Statistics (7 Days) ===")
@@ -719,7 +707,6 @@ def main():
         print(f"Total PnL: {stats['total_pnl']:.2f} USDT")
         print(f"Avg Profit/Trade: {stats['avg_profit_per_trade']:.2f} USDT")
 
-        # Calculate and display compound growth projections
         growth_projections = calculate_compound_growth()
         if growth_projections:
             print("\n=== Compound Growth Projections ===")
@@ -748,23 +735,22 @@ def main():
     print("=========================\n")
     
     while True:
-        df = fetch_usdt_tickers()
+        df = fetch_usdt_tickers()  # This gets real-time data from Binance
         if df.empty:
             print("[INFO] No data returned from Binance API.")
             time.sleep(1)
             continue
 
-        scored_df = calculate_score(df)        # Create an explicit copy of the DataFrame
+        scored_df = calculate_score(df)
         filtered_df = scored_df.head(10).copy()
         now = time.time()
 
-        # Add probability column and sort
+        # Process real-time data without storing in database
         filtered_df.loc[:, 'probability'] = filtered_df['symbol'].apply(
             lambda x: estimate_prob_3pct_jump_and_price(x)[0]
         )
         filtered_df = filtered_df.sort_values('probability', ascending=False)
         
-        # Store price changes for all symbols to display later
         price_changes_map = {}
         
         for _, row in filtered_df.iterrows():
