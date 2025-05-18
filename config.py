@@ -8,7 +8,7 @@ HIGH_PROB_THRESHOLD = 0.5
 # Price movement thresholds
 TARGET_PRICE_CHANGE = 0.35  # Target 0.35% price change for taking profits
 LIVE_PRICE_CHANGE_MIN = 3.0  # Minimum live price change to consider entry (3%)
-STOP_LOSS_PCT = -10.0  # Stop loss at 10% loss
+STOP_LOSS_PCT = -1.0  # Stop loss at 10% loss
 MIN_PRICE_CHANGE = 0.05  # Minimum price movement to consider entry
 
 # Trading fees and parameters
