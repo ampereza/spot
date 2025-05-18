@@ -1,23 +1,15 @@
-import os
-import time
 import pandas as pd
 import requests
 import hmac
 import hashlib
-import logging
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 from supabase import create_client, Client
+import os
+import time
 from dotenv import load_dotenv
-from typing import List, Dict, Optional, cast, Any
+from typing import List, Dict, Optional
 from dataclasses import dataclass
-from config import *
-
-# Set up logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
+from datetime import datetime, timedelta
 
 # Load environment variables
 load_dotenv()
@@ -28,76 +20,40 @@ SUPABASE_KEY = os.getenv("SUPABASE_ANON_KEY")
 BINANCE_API_KEY = os.getenv("APIKey")
 BINANCE_API_SECRET = os.getenv("secretKey")
 
-if not all([SUPABASE_URL, SUPABASE_KEY, BINANCE_API_KEY, BINANCE_API_SECRET]):
-    raise ValueError("Missing required environment variables")
+if not SUPABASE_URL or not SUPABASE_KEY:
+    raise ValueError("SUPABASE_URL and SUPABASE_ANON_KEY environment variables must be set")
 
-# Cast environment variables to string since we've checked they exist
-SUPABASE_URL = cast(str, SUPABASE_URL)
-SUPABASE_KEY = cast(str, SUPABASE_KEY)
-BINANCE_API_KEY = cast(str, BINANCE_API_KEY)
-BINANCE_API_SECRET = cast(str, BINANCE_API_SECRET)
+if not BINANCE_API_KEY or not BINANCE_API_SECRET:
+    raise ValueError("BINANCE_API_KEY and BINANCE_API_SECRET environment variables must be set")
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# Global state
+BINANCE_URL = "https://api.binance.com/api/v3/ticker/24hr"
+
+# Constants
+INITIAL_INVESTMENT = 100  # Initial investment amount
+BINANCE_FEES_PCT = 0.00075  # 0.075% when paying with BNB
+SYMBOL_TTL = 5  # Reduced to check more frequently (5 seconds)
+DEBUG_MODE = True  # Enable debug logging
+
+# Global variables for trade tracking
 active_trades = {}
-recent_symbols = {}
+TRADE_TIMEOUT = timedelta(minutes=30)
+TARGET_PRICE_CHANGE = 0.35  # Target 0.35% price change for taking profits
+LIVE_PRICE_CHANGE_MIN = 0.1  # Minimum 0.5% live price change to consider entry
+STOP_LOSS_PCT = -10.0  # Stop loss at 10% loss
+MIN_PRICE_CHANGE = 0.05  # Minimum price movement to consider entry
+MAX_ACTIVE_TRADES = 3
+HIGH_PROB_THRESHOLD = 0.5  # 50% probability threshold for high probability trades
 
-# Initialize timeout from config
-TRADE_TIMEOUT = timedelta(minutes=TRADE_TIMEOUT_MINUTES)
-
-@dataclass
-class SimulatedTrade:
-    symbol: str
-    entry_price: float
-    quantity: float
-    timestamp: datetime
-    initial_pnl: float
-    trade_id: Optional[int] = None
-
-def fetch_price_data(symbol: str) -> Dict[str, Any]:
-    """Fetch all necessary price data for a symbol in a single request"""
-    try:
-        # Get klines data for all timeframes in one request
-        intervals = {
-            '1d': ('1d', 2),
-            '6h': ('6h', 2),
-            '1h': ('1h', 2),
-            '30m': ('30m', 2),
-            '15m': ('15m', 2),
-            '5m': ('5m', 2),
-            '1m': ('1m', 1)  # Current candle only
-        }
-        
-        price_data = {}
-        for timeframe, (interval, limit) in intervals.items():
-            endpoint = f"{BINANCE_URL}/klines?symbol={symbol}&interval={interval}&limit={limit}"
-            response = requests.get(endpoint)
-            response.raise_for_status()
-            data = response.json()
-            
-            if timeframe == '1m' and len(data) >= 1:
-                # For live price, compare open and current price of the current candle
-                open_price = float(data[0][1])
-                current_price = float(data[0][4])
-                price_data[f'{timeframe}_change'] = round(((current_price - open_price) / open_price) * 100, 2)
-                price_data['current_price'] = current_price
-            elif len(data) >= 2:
-                # For other timeframes, compare previous close with current close
-                old_price = float(data[0][4])
-                new_price = float(data[1][4])
-                price_data[f'{timeframe}_change'] = round(((new_price - old_price) / old_price) * 100, 2)
-        
-        return price_data
-    except Exception as e:
-        logger.error(f"Failed to fetch price data for {symbol}: {e}")
-        return {}
+def log_debug(msg: str):
+    if DEBUG_MODE:
+        print(f"[DEBUG] {msg}")
 
 def fetch_usdt_tickers():
-    """Fetch USDT trading pairs"""
     try:
-        logger.info("Fetching USDT tickers...")
-        response = requests.get(f"{BINANCE_URL}/ticker/24hr")
+        log_debug("Fetching USDT tickers...")
+        response = requests.get(BINANCE_URL)
         response.raise_for_status()
         data = pd.DataFrame(response.json())
         usdt_tickers = data[data['symbol'].str.endswith("USDT")].copy()
@@ -106,11 +62,10 @@ def fetch_usdt_tickers():
         usdt_tickers['timestamp'] = datetime.now(timezone.utc).isoformat()
         return usdt_tickers[['symbol', 'priceChangePercent', 'quoteVolume', 'timestamp']]
     except requests.exceptions.RequestException as e:
-        logger.error(f"Failed to fetch data from Binance: {e}")
+        print(f"[ERROR] Failed to fetch data from Binance: {e}")
         return pd.DataFrame()
 
-def calculate_score(df: pd.DataFrame) -> pd.DataFrame:
-    """Calculate trading scores for symbols"""
+def calculate_score(df):
     if df.empty:
         return df
     df['volatility_score'] = df['priceChangePercent'].abs()
@@ -122,8 +77,20 @@ def calculate_score(df: pd.DataFrame) -> pd.DataFrame:
         df['volume_score'] * 0.3 +
         df['momentum_score'] * 0.3
     )
-    return df[['symbol', 'priceChangePercent', 'quoteVolume', 'composite_score', 'timestamp']].sort_values(
-        by='composite_score', ascending=False)
+    return df[['symbol', 'priceChangePercent', 'quoteVolume', 'composite_score', 'timestamp']].sort_values(by='composite_score', ascending=False)
+
+def save_to_supabase(df):
+    for _, row in df.iterrows():
+        data = {
+            "symbol": row['symbol'],
+            "price_change_pct": row['priceChangePercent'],
+            "quote_volume": row['quoteVolume'],
+            "timestamp": row['timestamp']
+        }
+        try:
+            supabase.table("market_signals").insert(data).execute()
+        except Exception as e:
+            print(f"[ERROR] Supabase insert failed: {e}")
 
 def calculate_pnl(investment, price_change_pct, fees_pct):
     gross_return = investment * (price_change_pct / 100)
@@ -131,6 +98,39 @@ def calculate_pnl(investment, price_change_pct, fees_pct):
     trend_fee = investment * 0.001  # 0.1% trend fee
     net_return = gross_return - trading_fees - trend_fee
     return round(net_return, 2)
+
+def fetch_15m_price_change(symbol):
+    try:
+        endpoint = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval=15m&limit=2"
+        response = requests.get(endpoint)
+        response.raise_for_status()
+        data = response.json()
+        if len(data) >= 2:
+            old_price = float(data[0][4])
+            new_price = float(data[1][4])
+            return round(((new_price - old_price) / old_price) * 100, 2)
+        return 0.0
+    except Exception as e:
+        print(f"[ERROR] Failed to fetch 15m price change for {symbol}: {e}")
+        return 0.0
+
+def fetch_5m_price_change(symbol):
+    try:
+        # Get more candles to ensure we capture actual 5-minute change
+        endpoint = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval=1m&limit=10"
+        response = requests.get(endpoint)
+        response.raise_for_status()
+        data = response.json()
+        
+        if len(data) >= 5:  # Need at least 5 one-minute candles
+            # Get price from 5 minutes ago and current price
+            five_min_ago_price = float(data[-5][4])  # Close price from 5 candles ago
+            current_price = float(data[-1][4])       # Most recent close price
+            return round(((current_price - five_min_ago_price) / five_min_ago_price) * 100, 2)
+        return 0.0
+    except Exception as e:
+        print(f"[ERROR] Failed to fetch 5m price change for {symbol}: {e}")
+        return 0.0
 
 def estimate_prob_3pct_jump_and_price(symbol):
     try:
@@ -165,8 +165,62 @@ def estimate_prob_3pct_jump_and_price(symbol):
         return prob_3pct, current_price, upper_price, lower_price
 
     except Exception as e:
-        logger.error(f"Failed to estimate 3% jump probability for {symbol}: {e}")
+        print(f"[ERROR] Failed to estimate 3% jump probability for {symbol}: {e}")
         return 0.0, 0.0, 0.0, 0.0
+
+def get_spot_balance():
+    try:
+        timestamp = int(time.time() * 1000)
+        params = {
+            'timestamp': timestamp
+        }
+        query_string = '&'.join([f"{k}={v}" for k, v in params.items()])
+        signature = hmac.new(
+            BINANCE_API_SECRET.encode('utf-8'),
+            query_string.encode('utf-8'),
+            hashlib.sha256
+        ).hexdigest()
+        
+        url = 'https://api.binance.com/api/v3/account'
+        headers = {
+            'X-MBX-APIKEY': BINANCE_API_KEY
+        }
+        params['signature'] = signature
+        
+        response = requests.get(url, headers=headers, params=params)
+        response.raise_for_status()
+        account_info = response.json()
+        
+        # Filter non-zero balances and format them
+        balances = []
+        for asset in account_info['balances']:
+            free = float(asset['free'])
+            locked = float(asset['locked'])
+            total = free + locked
+            if total > 0:
+                balances.append({
+                    'asset': asset['asset'],
+                    'free': free,
+                    'locked': locked,
+                    'total': total
+                })
+        
+        # Sort by total value
+        balances.sort(key=lambda x: x['total'], reverse=True)
+        return balances
+    except Exception as e:
+        print(f"[ERROR] Failed to fetch spot balance: {e}")
+        return []
+
+@dataclass
+class SimulatedTrade:
+    symbol: str
+    entry_price: float
+    quantity: float
+    timestamp: datetime
+    probability: float
+    initial_pnl: float
+    trade_id: Optional[int] = None  # Track the database ID
 
 def save_trade_entry(symbol: str, buy_price: float, quantity: float) -> Optional[int]:
     """Save new trade to Supabase and return the trade ID"""
@@ -180,11 +234,11 @@ def save_trade_entry(symbol: str, buy_price: float, quantity: float) -> Optional
         result = supabase.table("trades").insert(data).execute()
         return result.data[0]["id"]
     except Exception as e:
-        logger.error(f"Failed to save trade entry to Supabase: {e}")
+        print(f"[ERROR] Failed to save trade entry to Supabase: {e}")
         return None
 
 def update_trade_exit(trade_id: int, sell_price: float, profit_loss: float, exit_reason: str):
-    """Update trade in Supabase with exit information"""
+    """Update trade in Supabase with exit information including reason"""
     try:
         data = {
             "sell_price": sell_price,
@@ -194,9 +248,9 @@ def update_trade_exit(trade_id: int, sell_price: float, profit_loss: float, exit
         }
         supabase.table("trades").update(data).eq("id", trade_id).execute()
     except Exception as e:
-        logger.error(f"Failed to update trade exit in Supabase: {e}")
+        print(f"[ERROR] Failed to update trade exit in Supabase: {e}")
 
-def fetch_active_trades_from_db() -> Dict[str, SimulatedTrade]:
+def fetch_active_trades_from_db():
     """Fetch active trades from database that haven't been closed"""
     try:
         result = supabase.table("trades").select("*").is_("sell_time", "null").execute()
@@ -207,13 +261,98 @@ def fetch_active_trades_from_db() -> Dict[str, SimulatedTrade]:
                 entry_price=trade['buy_price'],
                 quantity=trade['quantity'],
                 timestamp=datetime.fromisoformat(trade['buy_time'].replace('Z', '+00:00')),
-                initial_pnl=0.0,
+                probability=0.0,  # Default value since we don't store this
+                initial_pnl=0.0,  # Default value since we don't store this
                 trade_id=trade['id']
             )
         return recovered_trades
     except Exception as e:
-        logger.error(f"Failed to fetch active trades from database: {e}")
+        print(f"[ERROR] Failed to fetch active trades from database: {e}")
         return {}
+
+def get_current_probability(symbol: str) -> float:
+    """Get current probability for a symbol"""
+    prob, _, _, _ = estimate_prob_3pct_jump_and_price(symbol)
+    return prob
+
+def force_exit_lowest_probability_trade() -> bool:
+    """Force exit the trade with lowest current probability"""
+    if not active_trades:
+        return False
+        
+    lowest_prob_symbol = None
+    lowest_prob = float('inf')
+    
+    # Find trade with lowest current probability
+    for symbol in active_trades:
+        current_prob = get_current_probability(symbol)
+        if current_prob < lowest_prob:
+            lowest_prob = current_prob
+            lowest_prob_symbol = symbol
+    
+    if lowest_prob_symbol and lowest_prob < HIGH_PROB_THRESHOLD:
+        # Get current price for exit
+        _, current_price, _, _ = estimate_prob_3pct_jump_and_price(lowest_prob_symbol)
+        if current_price > 0:
+            print(f"[TRADE REPLACEMENT] Exiting low probability trade {lowest_prob_symbol} (prob={lowest_prob:.2f})")
+            return check_trade_exit(lowest_prob_symbol, current_price)
+    return False
+
+def evaluate_trading_opportunity(symbol: str, delta_15m: float, delta_5m: float, prob_3pct: float, 
+                               current_price: float, pnl: float):
+    """Evaluate if we should enter a trade based on price movements and probability"""
+    # Validate current price
+    if not current_price or current_price <= 0:
+        print(f"[WARNING] Invalid price for {symbol}: {current_price}")
+        return
+        
+    # Check for minimum price movement in last 5 minutes
+    if delta_5m < MIN_PRICE_CHANGE:
+        return
+
+    # If this is a high probability trade and we're at max capacity
+    if prob_3pct >= HIGH_PROB_THRESHOLD and len(active_trades) >= MAX_ACTIVE_TRADES:
+        # Try to exit a lower probability trade
+        if force_exit_lowest_probability_trade():
+            print(f"[HIGH PROBABILITY] Made room for high probability trade {symbol}")
+        else:
+            return
+
+    # Skip if we already have maximum trades and this is not a high probability trade
+    if len(active_trades) >= MAX_ACTIVE_TRADES and prob_3pct < HIGH_PROB_THRESHOLD:
+        return
+        
+    # Check if trade exists in database but not in memory
+    try:
+        result = supabase.table("trades").select("*").eq("symbol", symbol).is_("sell_time", "null").execute()
+        if result.data:
+            trade_data = result.data[0]
+            # Recover trade to memory if found
+            active_trades[symbol] = SimulatedTrade(
+                symbol=symbol,
+                entry_price=trade_data['buy_price'],
+                quantity=trade_data['quantity'],
+                timestamp=datetime.fromisoformat(trade_data['buy_time'].replace('Z', '+00:00')),
+                probability=0.0,
+                initial_pnl=0.0,
+                trade_id=trade_data['id']
+            )
+            print(f"[INFO] Recovered existing trade for {symbol} from database")
+            return
+    except Exception as e:
+        print(f"[ERROR] Failed to check existing trade in database: {e}")
+        
+    # Calculate quantity based on investment amount
+    quantity = INVESTMENT_AMOUNT / current_price
+    
+    # Higher investment for high probability trades
+    if prob_3pct >= HIGH_PROB_THRESHOLD:
+        quantity *= 1.5  # Increase position size by 50% for high probability trades
+        print(f"[HIGH PROBABILITY] Found high probability trade for {symbol} (prob={prob_3pct:.2f})")
+    
+    # If criteria met, simulate trade entry
+    if simulate_trade_entry(symbol, current_price, quantity, prob_3pct, delta_5m):
+        print(f"[INFO] Started monitoring trade for {symbol}")
 
 def check_trade_exit(symbol: str, current_price: float) -> bool:
     """Check if we should exit a trade based on profit target, stop loss, or timeout"""
@@ -223,11 +362,13 @@ def check_trade_exit(symbol: str, current_price: float) -> bool:
     trade = active_trades[symbol]
     current_time = datetime.now(timezone.utc)
     
+    # Skip if current_price is invalid
     if not current_price or current_price <= 0:
-        logger.warning(f"Invalid exit price for {symbol}: {current_price}")
+        print(f"[WARNING] Invalid exit price for {symbol}: {current_price}")
         return False
     
     price_change = ((current_price - trade.entry_price) / trade.entry_price) * 100
+    actual_pnl = calculate_pnl(INVESTMENT_AMOUNT, price_change, BINANCE_FEES_PCT)
     
     timeout_exit = (current_time - trade.timestamp) > TRADE_TIMEOUT
     profit_target_reached = price_change >= TARGET_PRICE_CHANGE
@@ -241,74 +382,29 @@ def check_trade_exit(symbol: str, current_price: float) -> bool:
         else:
             exit_reason = "Timeout ⏰"
         
-        logger.info(f"\n[TRADE EXIT] {symbol}")
-        logger.info(f"Entry Price: {trade.entry_price:.8f}")
-        logger.info(f"Exit Price: {current_price:.8f} ({price_change:+.2f}%)")
-        logger.info(f"Time in trade: {current_time - trade.timestamp}")
-        logger.info(f"Investment: {INITIAL_INVESTMENT:.2f} USDT")
-        logger.info(f"Reason: {exit_reason}")
+        print(f"\n[TRADE EXIT] {symbol}")
+        print(f"Entry Price: {trade.entry_price:.8f}")
+        print(f"Exit Price: {current_price:.8f} ({price_change:+.2f}%)")
+        print(f"Time in trade: {current_time - trade.timestamp}")
+        print(f"Investment: {INVESTMENT_AMOUNT:.2f} USDT")
+        print(f"Final PnL: {actual_pnl:.2f} USDT")
+        print(f"Reason: {exit_reason}")
+        print(f"Fees paid: {(INVESTMENT_AMOUNT * BINANCE_FEES_PCT * 2):.4f} USDT")
         
+        # Update trade exit in Supabase with reason
         if trade.trade_id is not None:
-            update_trade_exit(trade.trade_id, current_price, price_change, exit_reason)
+            update_trade_exit(trade.trade_id, current_price, actual_pnl, exit_reason)
         
         del active_trades[symbol]
         return True
     return False
 
-def evaluate_trading_opportunity(symbol: str, price_data: Dict[str, Any]):
-    """Evaluate if we should enter a trade based on price movements"""
-    current_price = price_data.get('current_price')
-    if not current_price or current_price <= 0:
-        logger.warning(f"Invalid price for {symbol}: {current_price}")
-        return
-        
-    # Check for positive price movements in recent timeframes
-    one_min_change = price_data.get('1m_change', 0)
-    five_min_change = price_data.get('5m_change', 0)
-    fifteen_min_change = price_data.get('15m_change', 0)
-    
-    # Filter out if any recent timeframe had negative price change
-    if one_min_change < 0 or five_min_change < 0 or fifteen_min_change < 0:
-        logger.info(f"Skipping {symbol} due to negative recent price changes: "
-                   f"1m: {one_min_change:+.2f}%, 5m: {five_min_change:+.2f}%, 15m: {fifteen_min_change:+.2f}%")
-        return
-        
-    # Check for minimum price movement in last 5 minutes
-    if five_min_change < MIN_PRICE_CHANGE:
-        return
-
-    # Skip if we already have maximum trades
-    if len(active_trades) >= MAX_ACTIVE_TRADES:
-        return
-        
-    # Check if trade exists in database but not in memory
-    try:
-        result = supabase.table("trades").select("*").eq("symbol", symbol).is_("sell_time", "null").execute()
-        if result.data:
-            trade_data = result.data[0]
-            active_trades[symbol] = SimulatedTrade(
-                symbol=symbol,
-                entry_price=trade_data['buy_price'],
-                quantity=trade_data['quantity'],
-                timestamp=datetime.fromisoformat(trade_data['buy_time'].replace('Z', '+00:00')),
-                initial_pnl=0.0,
-                trade_id=trade_data['id']
-            )
-            logger.info(f"Recovered existing trade for {symbol} from database")
-            return
-    except Exception as e:
-        logger.error(f"Failed to check existing trade in database: {e}")
-        
-    # Calculate quantity based on investment amount
-    quantity = INITIAL_INVESTMENT / current_price
-    
-    # If criteria met, simulate trade entry
-    if simulate_trade_entry(symbol, current_price, quantity, price_data.get('5m_change', 0)):
-        logger.info(f"Started monitoring trade for {symbol}")
-
-def simulate_trade_entry(symbol: str, current_price: float, quantity: float, initial_pnl: float) -> bool:
+def simulate_trade_entry(symbol: str, current_price: float, quantity: float, probability: float, initial_pnl: float):
     """Simulate entering a trade"""
-    if len(active_trades) >= MAX_ACTIVE_TRADES or symbol in active_trades:
+    if len(active_trades) >= MAX_ACTIVE_TRADES:
+        return False
+        
+    if symbol in active_trades:
         return False
     
     # Save trade to database first
@@ -318,18 +414,21 @@ def simulate_trade_entry(symbol: str, current_price: float, quantity: float, ini
         symbol=symbol,
         entry_price=current_price,
         quantity=quantity,
-        timestamp=datetime.now(timezone.utc),
+        timestamp=datetime.now(timezone.utc),  # Make timezone-aware
+        probability=probability,
         initial_pnl=initial_pnl,
         trade_id=trade_id
     )
     active_trades[symbol] = trade
     
-    logger.info(f"[TRADE ENTRY] {symbol}")
-    logger.info(f"Entry Price: {current_price:.8f}")
-    logger.info(f"Quantity: {quantity:.4f}")
-    logger.info(f"Initial PnL (5m change): {initial_pnl:.2f} USDT")
-    logger.info(f"Trade ID: {trade_id}")
-    logger.info("===============================")
+    # Log the simulated trade entry
+    print(f"[TRADE ENTRY] {symbol}")
+    print(f"Entry Price: {current_price:.8f}")
+    print(f"Quantity: {quantity:.4f}")
+    print(f"Probability of 3% jump: {probability:.2f}%")
+    print(f"Initial PnL (5m change): {initial_pnl:.2f} USDT")
+    print(f"Trade ID: {trade_id}")
+    print("===============================")
     
     return True
 
@@ -368,7 +467,7 @@ def fetch_price_changes(symbol: str) -> Dict[str, float]:
                 changes[tf] = 0.0
                 
         except Exception as e:
-            logger.error(f"Failed to fetch {tf} price change for {symbol}: {e}")
+            print(f"[ERROR] Failed to fetch {tf} price change for {symbol}: {e}")
             changes[tf] = 0.0
     
     return changes
@@ -385,7 +484,7 @@ def get_total_capital():
             return round(total_capital * 0.95, 2)
         return INITIAL_INVESTMENT  # Return initial investment if no trades found
     except Exception as e:
-        logger.error(f"Failed to calculate total capital: {e}")
+        print(f"[ERROR] Failed to calculate total capital: {e}")
         return INITIAL_INVESTMENT
 
 def get_trading_stats(days: int = 7):
@@ -419,7 +518,7 @@ def get_trading_stats(days: int = 7):
         }
         return stats
     except Exception as e:
-        logger.error(f"Failed to calculate trading stats: {e}")
+        print(f"[ERROR] Failed to calculate trading stats: {e}")
         return None
 
 def get_dynamic_position_size(current_capital: float, symbol: str) -> float:
@@ -445,7 +544,7 @@ def get_dynamic_position_size(current_capital: float, symbol: str) -> float:
         # Round to 2 decimal places
         return round(position_size, 2)
     except Exception as e:
-        logger.error(f"Failed to calculate dynamic position size: {e}")
+        print(f"[ERROR] Failed to calculate dynamic position size: {e}")
         return current_capital * 0.95  # Default to 95% if error
 
 def calculate_compound_growth(initial_capital: float = INITIAL_INVESTMENT, trades_per_day: int = 50):
@@ -493,7 +592,7 @@ def calculate_compound_growth(initial_capital: float = INITIAL_INVESTMENT, trade
             }
         }
     except Exception as e:
-        logger.error(f"Failed to calculate compound growth: {e}")
+        print(f"[ERROR] Failed to calculate compound growth: {e}")
         return None
 
 def generate_daily_report():
@@ -549,152 +648,172 @@ def generate_daily_report():
         with open(report_filename, 'w') as f:
             f.write(report_content)
         
-        logger.info(f"Daily report saved to {report_filename}")
+        print(f"\n[INFO] Daily report saved to {report_filename}")
         
     except Exception as e:
-        logger.error(f"Failed to generate daily report: {e}")
+        print(f"[ERROR] Failed to generate daily report: {e}")
 
-def display_trading_status(filtered_df: pd.DataFrame, price_data_map: Dict[str, Dict[str, Any]]):
-    """Display active trades and potential trading candidates with detailed price information"""
-    logger.info("\n" + "="*50)
-    logger.info("TRADING STATUS REPORT")
-    logger.info("="*50)
+def display_trading_status(filtered_df, price_changes_map=None):
+    """Display active trades and potential trading candidates"""
+    print("\n=== Current Trading Status ===")
     
-    # Display active trades with detailed price information
-    logger.info("\n📊 ACTIVE TRADES:")
+    # Display active trades
+    print("\nActive Trades:")
     if active_trades:
         for symbol, trade in active_trades.items():
-            price_data = price_data_map.get(symbol, {})
-            current_price = price_data.get('current_price', 0)
-            if current_price:
-                price_change = ((current_price - trade.entry_price) / trade.entry_price) * 100
-                profit_loss = price_change > 0
-                status_emoji = "📈" if profit_loss else "📉"
-                
-                logger.info(f"\n{status_emoji} {symbol}")
-                logger.info(f"    Entry Price: {trade.entry_price:.8f}")
-                logger.info(f"    Current Price: {current_price:.8f}")
-                logger.info(f"    Change: {price_change:+.2f}%")
-                logger.info(f"    Time in Trade: {datetime.now(timezone.utc) - trade.timestamp}")
-                
-                # Show price changes for different timeframes
-                timeframes = ['1m', '5m', '15m', '1h', '6h']
-                changes = [f"{tf}: {price_data.get(f'{tf}_change', 0):+.2f}%" for tf in timeframes]
-                logger.info(f"    Price Changes: {' | '.join(changes)}")
+            current_price = None
+            price_change = None
+            if price_changes_map and symbol in price_changes_map:
+                changes = price_changes_map[symbol]
+                if 'live' in changes:
+                    price_change = changes['live']
+            
+            if price_change:
+                print(f"  {symbol}: Entry={trade.entry_price:.8f}, Live Change={price_change:+.2f}%")
+            else:
+                print(f"  {symbol}: Entry={trade.entry_price:.8f}")
     else:
-        logger.info("  No active trades")
-      # Display potential trading candidates
-    logger.info("\n🎯 TOP TRADING CANDIDATES (Filtered for positive price action):")
+        print("  No active trades")
+    
+    # Display potential candidates
+    print("\nPotential Trades (Top 5 by Probability):")
     if not filtered_df.empty:
-        logger.info(f"{'Symbol':<10} {'Price':<12} {'1m':<8} {'5m':<8} {'15m':<8} {'1h':<8} {'Vol(USDT)':<15} {'Status':<10}")
-        logger.info("-"*85)
-        
-        for _, row in filtered_df.head(10).iterrows():
+        top_candidates = filtered_df.head(5)
+        for _, row in top_candidates.iterrows():
             symbol = row['symbol']
-            price_data = price_data_map.get(symbol, {})
-            current_price = price_data.get('current_price', 0)
-            
-            # Check if all recent timeframes are positive
-            one_min = price_data.get('1m_change', 0)
-            five_min = price_data.get('5m_change', 0)
-            fifteen_min = price_data.get('15m_change', 0)
-            one_hour = price_data.get('1h_change', 0)
-              # Check for >3% price movement and positive timeframes
-            status = "🔥 HOT" if one_min >= LIVE_PRICE_CHANGE_MIN else (
-                     "✅ VALID" if all(x > 0 for x in [one_min, five_min, fifteen_min]) else "❌ FILTERED")
-            
-            if current_price:
-                volume = row['quoteVolume'] / 1000000  # Convert to millions
-                logger.info(
-                    f"{symbol:<10} "
-                    f"{current_price:<12.8f} "
-                    f"{one_min:+6.2f}% "
-                    f"{five_min:+6.2f}% "
-                    f"{fifteen_min:+6.2f}% "
-                    f"{one_hour:+6.2f}% "
-                    f"{volume:>8.2f}M "
-                    f"{status:<10}"
-                )
+            prob = row['probability']
+            changes = price_changes_map.get(symbol, {}) if price_changes_map else {}
+            live_change = changes.get('live', 0)
+            print(f"  {symbol}: Prob={prob:.2f}, Live Change={live_change:+.2f}%")
     else:
-        logger.info("  No potential trades found")
-    
-    # Market Summary
-    logger.info("\n📈 MARKET SUMMARY:")
-    if price_data_map:
-        total_volume = sum(float(row['quoteVolume']) for _, row in filtered_df.iterrows()) / 1000000
-        active_pairs = len(filtered_df)
-        logger.info(f"Active USDT Pairs: {active_pairs}")
-        logger.info(f"Total Volume: {total_volume:.2f}M USDT")
-    
-    logger.info("\n" + "="*50)
+        print("  No potential trades found")
+    print("============================\n")
 
 def main():
-    logger.info("\n=== Trading Bot Started ===")
-    logger.info("Monitoring market for opportunities...")
+    print("\n=== Trading Bot Started ===")
+    print("Monitoring market for opportunities...")
+    print("Press Ctrl+C to exit\n")
     
     # Load existing trades from database
-    logger.info("\n=== Loading Existing Trades ===")
+    print("\n=== Loading Existing Trades ===")
     recovered_trades = fetch_active_trades_from_db()
     active_trades.update(recovered_trades)
     if recovered_trades:
-        logger.info(f"Recovered {len(recovered_trades)} active trades from database")
+        print(f"Recovered {len(recovered_trades)} active trades from database")
         for symbol, trade in recovered_trades.items():
-            logger.info(f"- {symbol}: Entry Price={trade.entry_price}, Quantity={trade.quantity}")
-    logger.info("============================\n")
+            print(f"- {symbol}: Entry Price={trade.entry_price}, Quantity={trade.quantity}")
+    print("============================\n")
 
+    # Print spot wallet balance and performance stats
+    print("\n=== Spot Wallet Balance ===")
+    balances = get_spot_balance()
+    if balances:
+        for balance in balances:
+            print(f"{balance['asset']}: Free={balance['free']:.8f}, Locked={balance['locked']:.8f}, Total={balance['total']:.8f}")
+      # Calculate and display performance statistics
+    stats = get_trading_stats(7)  # Get last 7 days stats
+    if stats:
+        print("\n=== Trading Statistics (7 Days) ===")
+        print(f"Total Trades: {stats['total_trades']}")
+        print(f"Win Rate: {stats['win_rate']}%")
+        print(f"Total PnL: {stats['total_pnl']:.2f} USDT")
+        print(f"Avg Profit/Trade: {stats['avg_profit_per_trade']:.2f} USDT")
+
+        # Calculate and display compound growth projections
+        growth_projections = calculate_compound_growth()
+        if growth_projections:
+            print("\n=== Compound Growth Projections ===")
+            print(f"Average Profit per Trade: {growth_projections['avg_profit_per_trade_pct']}%")
+            print("\nDaily Projection:")
+            print(f"  Trades: {growth_projections['daily']['trades']}")
+            print(f"  Profit %: {growth_projections['daily']['profit_pct']}%")
+            print(f"  Growth: {growth_projections['daily']['projected_growth']:.2f} USDT")
+            print("\nWeekly Projection:")
+            print(f"  Trades: {growth_projections['weekly']['trades']}")
+            print(f"  Profit %: {growth_projections['weekly']['profit_pct']}%")
+            print(f"  Growth: {growth_projections['weekly']['projected_growth']:.2f} USDT")
+            print("\nMonthly Projection:")
+            print(f"  Trades: {growth_projections['monthly']['trades']}")
+            print(f"  Profit %: {growth_projections['monthly']['profit_pct']}%")
+            print(f"  Growth: {growth_projections['monthly']['projected_growth']:.2f} USDT")
+            print("================================")
+
+    # Update investment amount based on total capital
+    global INVESTMENT_AMOUNT
+    total_capital = get_total_capital()
+    INVESTMENT_AMOUNT = get_dynamic_position_size(total_capital, "GENERAL")
+    print(f"\nInitial Capital: {INITIAL_INVESTMENT:.2f} USDT")
+    print(f"Current Total Capital: {total_capital:.2f} USDT")
+    print(f"Current Position Size: {INVESTMENT_AMOUNT:.2f} USDT")
+    print("=========================\n")
+    
     while True:
-        try:
-            df = fetch_usdt_tickers()
-            if df.empty:
-                logger.info("No data returned from Binance API.")
-                time.sleep(1)
+        df = fetch_usdt_tickers()
+        if df.empty:
+            print("[INFO] No data returned from Binance API.")
+            time.sleep(1)
+            continue
+
+        scored_df = calculate_score(df)        # Create an explicit copy of the DataFrame
+        filtered_df = scored_df.head(10).copy()
+        now = time.time()
+
+        # Add probability column and sort
+        filtered_df.loc[:, 'probability'] = filtered_df['symbol'].apply(
+            lambda x: estimate_prob_3pct_jump_and_price(x)[0]
+        )
+        filtered_df = filtered_df.sort_values('probability', ascending=False)
+        
+        # Store price changes for all symbols to display later
+        price_changes_map = {}
+        
+        for _, row in filtered_df.iterrows():
+            symbol = row['symbol']
+            if symbol in recent_symbols and (now - recent_symbols[symbol]) < SYMBOL_TTL:
                 continue
 
-            scored_df = calculate_score(df)
-            filtered_df = scored_df.head(10).copy()
-            now = time.time()
-            
-            price_data_map = {}
-            
-            for _, row in filtered_df.iterrows():
-                symbol = row['symbol']
-                if symbol in recent_symbols and (now - recent_symbols[symbol]) < SYMBOL_TTL:
-                    continue
+            recent_symbols[symbol] = now
+            price_changes = fetch_price_changes(symbol)
+            prob_3pct, current_price, upper_price, lower_price = estimate_prob_3pct_jump_and_price(symbol)            # Store price changes for display
+            price_changes_map[symbol] = price_changes
 
-                recent_symbols[symbol] = now
-                price_data = fetch_price_data(symbol)
-                price_data_map[symbol] = price_data
+            if all(v == 0.0 for v in price_changes.values()):
+                continue
 
-                if not price_data:
-                    continue                # Only process symbols with live price change greater than 3%
-                live_change = price_data.get('1m_change', 0)
-                if live_change < LIVE_PRICE_CHANGE_MIN:
-                    continue
-                
-                if live_change >= LIVE_PRICE_CHANGE_MIN:
-                    logger.info(f"🔥 Strong momentum detected for {symbol}: {live_change:+.2f}% in 1 minute")
+            # Only process symbols with live price change greater than our target
+            if price_changes['live'] < TARGET_PRICE_CHANGE:
+                continue
 
-                current_price = price_data.get('current_price')
-                
-                # Check existing trades
-                if current_price and symbol in active_trades:
-                    check_trade_exit(symbol, float(current_price))
-                elif current_price:
-                    evaluate_trading_opportunity(symbol, price_data)
+            pnl = calculate_pnl(INVESTMENT_AMOUNT, price_changes['15m'], BINANCE_FEES_PCT)
+            if pnl > 0:
+                print(f"📈 {symbol}:")
+                print(f"  24h: {price_changes['24h']:+.2f}% | 6h: {price_changes['6h']:+.2f}% | 1h: {price_changes['1h']:+.2f}%")
+                print(f"  30m: {price_changes['30m']:+.2f}% | 15m: {price_changes['15m']:+.2f}% | 5m: {price_changes['5m']:+.2f}%")
+                print(f"  Live: {price_changes['live']:+.2f}% | Prob≥3%: {prob_3pct}")
+                print(f"  Vol={row['quoteVolume']:.2f}, PnL={pnl:.2f} USDT")
+                print(f"  Price={current_price}, Range=({lower_price} - {upper_price})")
+
+            # Check existing trades
+            if symbol in active_trades:
+                check_trade_exit(symbol, current_price)            # Evaluate new trading opportunities
+            elif pnl > 0:
+                evaluate_trading_opportunity(symbol, price_changes['15m'], price_changes['5m'], 
+                                          prob_3pct, current_price, pnl)
                                           
-            # Display current trading status with detailed price information
-            display_trading_status(filtered_df, price_data_map)
-            
-            # Add a small delay to prevent hitting rate limits
-            time.sleep(2)
+        # Display current trading status after processing all symbols
+        display_trading_status(filtered_df, price_changes_map)
 
-        except KeyboardInterrupt:
-            logger.info("\n\nBot stopped by user.")
-            generate_daily_report()
-            break
-        except Exception as e:
-            logger.error(f"\n\nBot encountered an error: {e}")
-            time.sleep(1)
+        # Display active and potential trades status
+        display_trading_status(filtered_df, price_changes_map={})
 
 if __name__ == "__main__":
-    main()
+    # Initialize the recent_symbols dictionary
+    recent_symbols = {}
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("\n\nBot stopped by user.")
+        generate_daily_report()  # Generate report when bot is stopped
+    except Exception as e:
+        print(f"\n\nBot stopped due to error: {e}")
+        generate_daily_report()  # Generate report even if bot crashes

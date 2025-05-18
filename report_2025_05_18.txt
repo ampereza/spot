@@ -1,7 +1,7 @@
 === Daily Trading Report 2025-05-18 ===
 
 Opening Capital: 154.53 USDT
-Total Trades: 90
+Total Trades: 86
 Completed Trades: 86
 Total PnL: 43.84 USDT
 Average PnL per Trade: 0.51 USDT
@@ -267,20 +267,6 @@ Exit: 1.46600000
 Status: CLOSED
 PnL: 0.60 USDT
 -------------------------
-Trade ID: 248
-Symbol: SSVUSDT
-Entry: 10.05000000
-Exit: N/A
-Status: OPEN
-PnL: N/A
--------------------------
-Trade ID: 250
-Symbol: BBUSDT
-Entry: 0.19350000
-Exit: N/A
-Status: OPEN
-PnL: N/A
--------------------------
 Trade ID: 252
 Symbol: VIRTUALUSDT
 Entry: 2.08220000
@@ -301,13 +287,6 @@ Entry: 0.02901000
 Exit: 0.02927000
 Status: CLOSED
 PnL: 0.93 USDT
--------------------------
-Trade ID: 257
-Symbol: PEOPLEUSDT
-Entry: 0.02929000
-Exit: N/A
-Status: OPEN
-PnL: N/A
 -------------------------
 Trade ID: 256
 Symbol: PNUTUSDT
@@ -630,11 +609,4 @@ Entry: 0.02858000
 Exit: 0.02878000
 Status: CLOSED
 PnL: 0.65 USDT
--------------------------
-Trade ID: 258
-Symbol: PNUTUSDT
-Entry: 0.36380000
-Exit: N/A
-Status: OPEN
-PnL: N/A
 -------------------------
