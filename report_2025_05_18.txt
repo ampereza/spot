@@ -1,10 +1,10 @@
 === Daily Trading Report 2025-05-18 ===
 
-Opening Capital: 151.09 USDT
-Total Trades: 82
-Completed Trades: 78
-Total PnL: 40.22 USDT
-Average PnL per Trade: 0.52 USDT
+Opening Capital: 154.53 USDT
+Total Trades: 90
+Completed Trades: 86
+Total PnL: 43.84 USDT
+Average PnL per Trade: 0.51 USDT
 
 === Trade Details ===
 
@@ -77,13 +77,6 @@ Entry: 0.00059771
 Exit: 0.00060450
 Status: CLOSED
 PnL: 1.21 USDT
--------------------------
-Trade ID: 239
-Symbol: KAITOUSDT
-Entry: 1.86720000
-Exit: N/A
-Status: OPEN
-PnL: N/A
 -------------------------
 Trade ID: 158
 Symbol: LTOUSDT
@@ -274,12 +267,54 @@ Exit: 1.46600000
 Status: CLOSED
 PnL: 0.60 USDT
 -------------------------
-Trade ID: 246
-Symbol: XAIUSDT
-Entry: 0.08920000
+Trade ID: 248
+Symbol: SSVUSDT
+Entry: 10.05000000
 Exit: N/A
 Status: OPEN
 PnL: N/A
+-------------------------
+Trade ID: 250
+Symbol: BBUSDT
+Entry: 0.19350000
+Exit: N/A
+Status: OPEN
+PnL: N/A
+-------------------------
+Trade ID: 252
+Symbol: VIRTUALUSDT
+Entry: 2.08220000
+Exit: 2.09550000
+Status: CLOSED
+PnL: 0.56 USDT
+-------------------------
+Trade ID: 254
+Symbol: PEOPLEUSDT
+Entry: 0.02883000
+Exit: 0.02901000
+Status: CLOSED
+PnL: 0.54 USDT
+-------------------------
+Trade ID: 255
+Symbol: PEOPLEUSDT
+Entry: 0.02901000
+Exit: 0.02927000
+Status: CLOSED
+PnL: 0.93 USDT
+-------------------------
+Trade ID: 257
+Symbol: PEOPLEUSDT
+Entry: 0.02929000
+Exit: N/A
+Status: OPEN
+PnL: N/A
+-------------------------
+Trade ID: 256
+Symbol: PNUTUSDT
+Entry: 0.36030000
+Exit: 0.36220000
+Status: CLOSED
+PnL: 0.40 USDT
 -------------------------
 Trade ID: 238
 Symbol: VIRTUALUSDT
@@ -442,13 +477,6 @@ Exit: 0.04910000
 Status: CLOSED
 PnL: 0.50 USDT
 -------------------------
-Trade ID: 234
-Symbol: LTOUSDT
-Entry: 0.04900000
-Exit: N/A
-Status: OPEN
-PnL: N/A
--------------------------
 Trade ID: 173
 Symbol: DOGSUSDT
 Entry: 0.00019790
@@ -575,9 +603,37 @@ Exit: 0.05170000
 Status: CLOSED
 PnL: 0.19 USDT
 -------------------------
-Trade ID: 245
-Symbol: FXSUSDT
-Entry: 3.96900000
+Trade ID: 249
+Symbol: PNUTUSDT
+Entry: 0.36310000
+Exit: 0.36460000
+Status: CLOSED
+PnL: 0.23 USDT
+-------------------------
+Trade ID: 247
+Symbol: NEIROUSDT
+Entry: 0.00063224
+Exit: 0.00063450
+Status: CLOSED
+PnL: 0.15 USDT
+-------------------------
+Trade ID: 251
+Symbol: PEOPLEUSDT
+Entry: 0.02784000
+Exit: 0.02794000
+Status: CLOSED
+PnL: 0.16 USDT
+-------------------------
+Trade ID: 253
+Symbol: PEOPLEUSDT
+Entry: 0.02858000
+Exit: 0.02878000
+Status: CLOSED
+PnL: 0.65 USDT
+-------------------------
+Trade ID: 258
+Symbol: PNUTUSDT
+Entry: 0.36380000
 Exit: N/A
 Status: OPEN
 PnL: N/A
