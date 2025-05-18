@@ -547,6 +547,54 @@ def get_dynamic_position_size(current_capital: float, symbol: str) -> float:
         print(f"[ERROR] Failed to calculate dynamic position size: {e}")
         return current_capital * 0.95  # Default to 95% if error
 
+def calculate_compound_growth(initial_capital: float = INITIAL_INVESTMENT, trades_per_day: int = 50):
+    """Calculate compound growth projections based on historical performance"""
+    try:
+        # Get recent performance stats
+        stats = get_trading_stats(7)
+        if not stats or stats['total_trades'] == 0:
+            return None
+
+        # Calculate average profit percentage per trade (accounting for fees and actual trade PnL)
+        avg_profit_pct = (stats['total_pnl'] / (INITIAL_INVESTMENT * stats['total_trades'])) * 100
+
+        # Daily compound calculation (compound each trade)
+        daily_trades = trades_per_day
+        daily_growth = initial_capital * pow((1 + avg_profit_pct/100), daily_trades)
+        daily_return_pct = ((daily_growth - initial_capital) / initial_capital) * 100
+        
+        # Weekly compound calculation (5 trading days)
+        weekly_trades = daily_trades * 5
+        weekly_growth = initial_capital * pow((1 + avg_profit_pct/100), weekly_trades)
+        weekly_return_pct = ((weekly_growth - initial_capital) / initial_capital) * 100
+        
+        # Monthly compound calculation (21 trading days)
+        monthly_trades = daily_trades * 21
+        monthly_growth = initial_capital * pow((1 + avg_profit_pct/100), monthly_trades)
+        monthly_return_pct = ((monthly_growth - initial_capital) / initial_capital) * 100
+        
+        return {
+            'avg_profit_per_trade_pct': round(avg_profit_pct, 4),
+            'daily': {
+                'trades': daily_trades,
+                'profit_pct': round(daily_return_pct, 2),
+                'projected_growth': round(daily_growth, 2)
+            },
+            'weekly': {
+                'trades': weekly_trades,
+                'profit_pct': round(weekly_return_pct, 2),
+                'projected_growth': round(weekly_growth, 2)
+            },
+            'monthly': {
+                'trades': monthly_trades,
+                'profit_pct': round(monthly_return_pct, 2),
+                'projected_growth': round(monthly_growth, 2)
+            }
+        }
+    except Exception as e:
+        print(f"[ERROR] Failed to calculate compound growth: {e}")
+        return None
+
 def main():
     print("\n=== Trading Bot Started ===")
     print("Monitoring market for opportunities...")
@@ -568,8 +616,7 @@ def main():
     if balances:
         for balance in balances:
             print(f"{balance['asset']}: Free={balance['free']:.8f}, Locked={balance['locked']:.8f}, Total={balance['total']:.8f}")
-    
-    # Calculate and display performance statistics
+      # Calculate and display performance statistics
     stats = get_trading_stats(7)  # Get last 7 days stats
     if stats:
         print("\n=== Trading Statistics (7 Days) ===")
@@ -577,7 +624,27 @@ def main():
         print(f"Win Rate: {stats['win_rate']}%")
         print(f"Total PnL: {stats['total_pnl']:.2f} USDT")
         print(f"Avg Profit/Trade: {stats['avg_profit_per_trade']:.2f} USDT")
-      # Update investment amount based on total capital
+
+        # Calculate and display compound growth projections
+        growth_projections = calculate_compound_growth()
+        if growth_projections:
+            print("\n=== Compound Growth Projections ===")
+            print(f"Average Profit per Trade: {growth_projections['avg_profit_per_trade_pct']}%")
+            print("\nDaily Projection:")
+            print(f"  Trades: {growth_projections['daily']['trades']}")
+            print(f"  Profit %: {growth_projections['daily']['profit_pct']}%")
+            print(f"  Growth: {growth_projections['daily']['projected_growth']:.2f} USDT")
+            print("\nWeekly Projection:")
+            print(f"  Trades: {growth_projections['weekly']['trades']}")
+            print(f"  Profit %: {growth_projections['weekly']['profit_pct']}%")
+            print(f"  Growth: {growth_projections['weekly']['projected_growth']:.2f} USDT")
+            print("\nMonthly Projection:")
+            print(f"  Trades: {growth_projections['monthly']['trades']}")
+            print(f"  Profit %: {growth_projections['monthly']['profit_pct']}%")
+            print(f"  Growth: {growth_projections['monthly']['projected_growth']:.2f} USDT")
+            print("================================")
+
+    # Update investment amount based on total capital
     global INVESTMENT_AMOUNT
     total_capital = get_total_capital()
     INVESTMENT_AMOUNT = get_dynamic_position_size(total_capital, "GENERAL")
