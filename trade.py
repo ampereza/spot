@@ -629,11 +629,13 @@ def generate_daily_report():
             report_content += "=== Trade Details ===\n\n"
             for trade in trades:
                 status = "CLOSED" if trade['sell_time'] else "OPEN"
-                pnl = trade['profit_loss'] if trade['profit_loss'] else "N/A"
+                pnl = f"{trade['profit_loss']:.2f} USDT" if trade['profit_loss'] is not None else "N/A"
+                exit_price = f"{trade['sell_price']:.8f}" if trade['sell_price'] is not None else "N/A"
+                
                 report_content += f"Trade ID: {trade['id']}\n"
                 report_content += f"Symbol: {trade['symbol']}\n"
                 report_content += f"Entry: {trade['buy_price']:.8f}\n"
-                report_content += f"Exit: {trade['sell_price']:.8f if trade['sell_price'] else 'N/A'}\n"
+                report_content += f"Exit: {exit_price}\n"
                 report_content += f"Status: {status}\n"
                 report_content += f"PnL: {pnl}\n"
                 report_content += "-------------------------\n"
@@ -650,6 +652,42 @@ def generate_daily_report():
         
     except Exception as e:
         print(f"[ERROR] Failed to generate daily report: {e}")
+
+def display_trading_status(filtered_df, price_changes_map=None):
+    """Display active trades and potential trading candidates"""
+    print("\n=== Current Trading Status ===")
+    
+    # Display active trades
+    print("\nActive Trades:")
+    if active_trades:
+        for symbol, trade in active_trades.items():
+            current_price = None
+            price_change = None
+            if price_changes_map and symbol in price_changes_map:
+                changes = price_changes_map[symbol]
+                if 'live' in changes:
+                    price_change = changes['live']
+            
+            if price_change:
+                print(f"  {symbol}: Entry={trade.entry_price:.8f}, Live Change={price_change:+.2f}%")
+            else:
+                print(f"  {symbol}: Entry={trade.entry_price:.8f}")
+    else:
+        print("  No active trades")
+    
+    # Display potential candidates
+    print("\nPotential Trades (Top 5 by Probability):")
+    if not filtered_df.empty:
+        top_candidates = filtered_df.head(5)
+        for _, row in top_candidates.iterrows():
+            symbol = row['symbol']
+            prob = row['probability']
+            changes = price_changes_map.get(symbol, {}) if price_changes_map else {}
+            live_change = changes.get('live', 0)
+            print(f"  {symbol}: Prob={prob:.2f}, Live Change={live_change:+.2f}%")
+    else:
+        print("  No potential trades found")
+    print("============================\n")
 
 def main():
     print("\n=== Trading Bot Started ===")
@@ -716,8 +754,7 @@ def main():
             time.sleep(1)
             continue
 
-        scored_df = calculate_score(df)
-        # Create an explicit copy of the DataFrame
+        scored_df = calculate_score(df)        # Create an explicit copy of the DataFrame
         filtered_df = scored_df.head(10).copy()
         now = time.time()
 
@@ -727,6 +764,9 @@ def main():
         )
         filtered_df = filtered_df.sort_values('probability', ascending=False)
         
+        # Store price changes for all symbols to display later
+        price_changes_map = {}
+        
         for _, row in filtered_df.iterrows():
             symbol = row['symbol']
             if symbol in recent_symbols and (now - recent_symbols[symbol]) < SYMBOL_TTL:
@@ -734,7 +774,8 @@ def main():
 
             recent_symbols[symbol] = now
             price_changes = fetch_price_changes(symbol)
-            prob_3pct, current_price, upper_price, lower_price = estimate_prob_3pct_jump_and_price(symbol)
+            prob_3pct, current_price, upper_price, lower_price = estimate_prob_3pct_jump_and_price(symbol)            # Store price changes for display
+            price_changes_map[symbol] = price_changes
 
             if all(v == 0.0 for v in price_changes.values()):
                 continue
@@ -754,11 +795,16 @@ def main():
 
             # Check existing trades
             if symbol in active_trades:
-                check_trade_exit(symbol, current_price)
-            # Evaluate new trading opportunities
+                check_trade_exit(symbol, current_price)            # Evaluate new trading opportunities
             elif pnl > 0:
                 evaluate_trading_opportunity(symbol, price_changes['15m'], price_changes['5m'], 
                                           prob_3pct, current_price, pnl)
+                                          
+        # Display current trading status after processing all symbols
+        display_trading_status(filtered_df, price_changes_map)
+
+        # Display active and potential trades status
+        display_trading_status(filtered_df, price_changes_map={})
 
 if __name__ == "__main__":
     # Initialize the recent_symbols dictionary

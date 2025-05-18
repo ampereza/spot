@@ -1,0 +1,367 @@
+=== Daily Trading Report 2025-05-18 ===
+
+Opening Capital: 109.32 USDT
+Total Trades: 51
+Completed Trades: 48
+Total PnL: -3.75 USDT
+Average PnL per Trade: -0.08 USDT
+
+=== Trade Details ===
+
+Trade ID: 186
+Symbol: NEIROUSDT
+Entry: 0.00054411
+Exit: 0.00055317
+Status: CLOSED
+PnL: 1.42 USDT
+-------------------------
+Trade ID: 187
+Symbol: FXSUSDT
+Entry: 3.84600000
+Exit: 3.83400000
+Status: CLOSED
+PnL: -0.56 USDT
+-------------------------
+Trade ID: 193
+Symbol: LTOUSDT
+Entry: 0.04700000
+Exit: 0.04800000
+Status: CLOSED
+PnL: 2.02 USDT
+-------------------------
+Trade ID: 196
+Symbol: LTOUSDT
+Entry: 0.04910000
+Exit: 0.04930000
+Status: CLOSED
+PnL: 0.17 USDT
+-------------------------
+Trade ID: 197
+Symbol: LTOUSDT
+Entry: 0.04960000
+Exit: 0.04990000
+Status: CLOSED
+PnL: 0.39 USDT
+-------------------------
+Trade ID: 191
+Symbol: NEIROUSDT
+Entry: 0.00055735
+Exit: 0.00054176
+Status: CLOSED
+PnL: -3.33 USDT
+-------------------------
+Trade ID: 201
+Symbol: LTOUSDT
+Entry: 0.05070000
+Exit: 0.04940000
+Status: CLOSED
+PnL: -3.08 USDT
+-------------------------
+Trade ID: 158
+Symbol: LTOUSDT
+Entry: 0.04780000
+Exit: 0.04800000
+Status: CLOSED
+PnL: 0.27 USDT
+-------------------------
+Trade ID: 159
+Symbol: ACMUSDT
+Entry: 1.02100000
+Exit: 1.03000000
+Status: CLOSED
+PnL: 0.73 USDT
+-------------------------
+Trade ID: 155
+Symbol: NEIROUSDT
+Entry: 0.00051514
+Exit: 0.00052882
+Status: CLOSED
+PnL: 2.50 USDT
+-------------------------
+Trade ID: 160
+Symbol: FXSUSDT
+Entry: 3.56000000
+Exit: 3.57200000
+Status: CLOSED
+PnL: 0.19 USDT
+-------------------------
+Trade ID: 147
+Symbol: PUNDIXUSDT
+Entry: 0.42200000
+Exit: 0.42450000
+Status: CLOSED
+PnL: 0.44 USDT
+-------------------------
+Trade ID: 148
+Symbol: ANIMEUSDT
+Entry: 0.02457000
+Exit: 0.02408000
+Status: CLOSED
+PnL: -2.14 USDT
+-------------------------
+Trade ID: 154
+Symbol: PORTALUSDT
+Entry: 0.09000000
+Exit: 0.07860000
+Status: CLOSED
+PnL: -12.79 USDT
+-------------------------
+Trade ID: 164
+Symbol: DOGSUSDT
+Entry: 0.00019220
+Exit: 0.00019280
+Status: CLOSED
+PnL: 0.16 USDT
+-------------------------
+Trade ID: 165
+Symbol: BBUSDT
+Entry: 0.16720000
+Exit: 0.16850000
+Status: CLOSED
+PnL: 0.63 USDT
+-------------------------
+Trade ID: 162
+Symbol: FXSUSDT
+Entry: 3.64600000
+Exit: 3.66700000
+Status: CLOSED
+PnL: 0.42 USDT
+-------------------------
+Trade ID: 166
+Symbol: NEIROUSDT
+Entry: 0.00052917
+Exit: 0.00053212
+Status: CLOSED
+PnL: 0.41 USDT
+-------------------------
+Trade ID: 168
+Symbol: PNUTUSDT
+Entry: 0.34810000
+Exit: 0.34990000
+Status: CLOSED
+PnL: 0.37 USDT
+-------------------------
+Trade ID: 169
+Symbol: FXSUSDT
+Entry: 3.68600000
+Exit: 3.70800000
+Status: CLOSED
+PnL: 0.45 USDT
+-------------------------
+Trade ID: 170
+Symbol: NEIROUSDT
+Entry: 0.00055609
+Exit: 0.00055989
+Status: CLOSED
+PnL: 0.53 USDT
+-------------------------
+Trade ID: 171
+Symbol: SYRUPUSDT
+Entry: 0.37870000
+Exit: 0.38110000
+Status: CLOSED
+PnL: 0.48 USDT
+-------------------------
+Trade ID: 185
+Symbol: DOGSUSDT
+Entry: 0.00020050
+Exit: 0.00019560
+Status: CLOSED
+PnL: -2.69 USDT
+-------------------------
+Trade ID: 182
+Symbol: LTOUSDT
+Entry: 0.04490000
+Exit: 0.04400000
+Status: CLOSED
+PnL: -2.25 USDT
+-------------------------
+Trade ID: 188
+Symbol: FIDAUSDT
+Entry: 0.09870000
+Exit: 0.09920000
+Status: CLOSED
+PnL: 0.26 USDT
+-------------------------
+Trade ID: 190
+Symbol: FIDAUSDT
+Entry: 0.09950000
+Exit: 0.10120000
+Status: CLOSED
+PnL: 1.46 USDT
+-------------------------
+Trade ID: 192
+Symbol: FIDAUSDT
+Entry: 0.10020000
+Exit: 0.10030000
+Status: CLOSED
+PnL: -0.16 USDT
+-------------------------
+Trade ID: 194
+Symbol: LTOUSDT
+Entry: 0.04800000
+Exit: 0.04840000
+Status: CLOSED
+PnL: 0.64 USDT
+-------------------------
+Trade ID: 195
+Symbol: LTOUSDT
+Entry: 0.04850000
+Exit: 0.04950000
+Status: CLOSED
+PnL: 1.95 USDT
+-------------------------
+Trade ID: 198
+Symbol: LTOUSDT
+Entry: 0.04980000
+Exit: 0.05000000
+Status: CLOSED
+PnL: 0.17 USDT
+-------------------------
+Trade ID: 199
+Symbol: LTOUSDT
+Entry: 0.05100000
+Exit: 0.05120000
+Status: CLOSED
+PnL: 0.16 USDT
+-------------------------
+Trade ID: 200
+Symbol: LTOUSDT
+Entry: 0.05140000
+Exit: 0.05000000
+Status: CLOSED
+PnL: -3.25 USDT
+-------------------------
+Trade ID: 202
+Symbol: FIDAUSDT
+Entry: 0.09880000
+Exit: N/A
+Status: OPEN
+PnL: N/A
+-------------------------
+Trade ID: 203
+Symbol: PNUTUSDT
+Entry: 0.33870000
+Exit: N/A
+Status: OPEN
+PnL: N/A
+-------------------------
+Trade ID: 204
+Symbol: NEIROUSDT
+Entry: 0.00054728
+Exit: N/A
+Status: OPEN
+PnL: N/A
+-------------------------
+Trade ID: 172
+Symbol: PNUTUSDT
+Entry: 0.35320000
+Exit: 0.35500000
+Status: CLOSED
+PnL: 0.36 USDT
+-------------------------
+Trade ID: 173
+Symbol: DOGSUSDT
+Entry: 0.00019790
+Exit: 0.00019900
+Status: CLOSED
+PnL: 0.40 USDT
+-------------------------
+Trade ID: 174
+Symbol: SYRUPUSDT
+Entry: 0.38130000
+Exit: 0.38330000
+Status: CLOSED
+PnL: 0.37 USDT
+-------------------------
+Trade ID: 175
+Symbol: MUBARAKUSDT
+Entry: 0.04870000
+Exit: 0.04910000
+Status: CLOSED
+PnL: 0.67 USDT
+-------------------------
+Trade ID: 177
+Symbol: MUBARAKUSDT
+Entry: 0.04910000
+Exit: 0.05010000
+Status: CLOSED
+PnL: 1.88 USDT
+-------------------------
+Trade ID: 178
+Symbol: DOGSUSDT
+Entry: 0.00019910
+Exit: 0.00020170
+Status: CLOSED
+PnL: 1.15 USDT
+-------------------------
+Trade ID: 179
+Symbol: PNUTUSDT
+Entry: 0.36000000
+Exit: 0.36240000
+Status: CLOSED
+PnL: 0.52 USDT
+-------------------------
+Trade ID: 180
+Symbol: FXSUSDT
+Entry: 3.72900000
+Exit: 3.75100000
+Status: CLOSED
+PnL: 0.44 USDT
+-------------------------
+Trade ID: 181
+Symbol: MUBARAKUSDT
+Entry: 0.04980000
+Exit: 0.05020000
+Status: CLOSED
+PnL: 0.65 USDT
+-------------------------
+Trade ID: 183
+Symbol: FXSUSDT
+Entry: 3.76300000
+Exit: 3.78300000
+Status: CLOSED
+PnL: 0.38 USDT
+-------------------------
+Trade ID: 184
+Symbol: MUBARAKUSDT
+Entry: 0.05040000
+Exit: 0.05080000
+Status: CLOSED
+PnL: 0.54 USDT
+-------------------------
+Trade ID: 151
+Symbol: NEIROUSDT
+Entry: 0.00050552
+Exit: 0.00051345
+Status: CLOSED
+PnL: 1.42 USDT
+-------------------------
+Trade ID: 152
+Symbol: FXSUSDT
+Entry: 3.51100000
+Exit: 3.52500000
+Status: CLOSED
+PnL: 0.25 USDT
+-------------------------
+Trade ID: 150
+Symbol: ANIMEUSDT
+Entry: 0.02436000
+Exit: 0.02449000
+Status: CLOSED
+PnL: 0.38 USDT
+-------------------------
+Trade ID: 156
+Symbol: ACMUSDT
+Entry: 1.01400000
+Exit: 1.02100000
+Status: CLOSED
+PnL: 0.54 USDT
+-------------------------
+Trade ID: 157
+Symbol: FXSUSDT
+Entry: 3.54800000
+Exit: 3.56500000
+Status: CLOSED
+PnL: 0.33 USDT
+-------------------------
