@@ -38,7 +38,7 @@ DEBUG_MODE = True  # Enable debug logging
 
 # Global variables for trade tracking
 active_trades = {}
-TRADE_TIMEOUT = timedelta(minutes=15)
+TRADE_TIMEOUT = timedelta(minutes=30)
 TARGET_PRICE_CHANGE = 0.35  # Target 0.35% price change for taking profits
 LIVE_PRICE_CHANGE_MIN = 0.1  # Minimum 0.5% live price change to consider entry
 STOP_LOSS_PCT = -1.0  # Stop loss at 1% loss
@@ -379,10 +379,25 @@ def check_trade_exit(symbol: str, current_price: float) -> bool:
     quick_exit = current_price >= trade.entry_price  # Immediate exit on breakeven or profit
     timeout_exit = (current_time - trade.timestamp) > TRADE_TIMEOUT
     stop_loss_triggered = price_change <= STOP_LOSS_PCT  # Keep stop loss for protection
+    profit_target_reached = price_change >= TARGET_PRICE_CHANGE
     
     # Prioritize quick exit if price is favorable
     if quick_exit:
-    
+        exit_reason = "Quick Exit ⚡"
+        print(f"\n[TRADE EXIT] {symbol}")
+        print(f"Entry Price: {trade.entry_price:.8f}")
+        print(f"Exit Price: {current_price:.8f} ({price_change:+.2f}%)")
+        print(f"Time in trade: {current_time - trade.timestamp}")
+        print(f"Investment: {INITIAL_INVESTMENT:.2f} USDT")
+        print(f"Final PnL: {actual_pnl:.2f} USDT")
+        print(f"Reason: {exit_reason}")
+        
+        if trade.trade_id is not None:
+            update_trade_exit(trade.trade_id, current_price, actual_pnl, exit_reason)
+        
+        del active_trades[symbol]
+        return True
+        
     if timeout_exit or profit_target_reached or stop_loss_triggered:
         if profit_target_reached:
             exit_reason = "Profit Target ✅"
