@@ -362,10 +362,10 @@ def check_trade_exit(symbol: str, current_price: float) -> bool:
     trade = active_trades[symbol]
     current_time = datetime.now(timezone.utc)
     
-    # Get real-time price from price tracker - prioritize real-time price
-    realtime_price = price_tracker.get_price(symbol)
-    if realtime_price:  # Use real-time price if available
-        current_price = realtime_price
+    # Remove or comment out the following two lines:
+    # realtime_price = price_tracker.get_price(symbol)
+    # if realtime_price:  # Use real-time price if available
+    #     current_price = realtime_price
     
     # Skip if price is invalid
     if not current_price or current_price <= 0:
