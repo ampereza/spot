@@ -33,18 +33,18 @@ BINANCE_URL = "https://api.binance.com/api/v3/ticker/24hr"
 # Constants
 INITIAL_INVESTMENT = 100  # Initial investment amount
 BINANCE_FEES_PCT = 0.00075  # 0.075% when paying with BNB
-SYMBOL_TTL = 5  # Reduced to check more frequently (5 seconds)
+SYMBOL_TTL = 1  # Reduced to check more frequently (1 second)
 DEBUG_MODE = True  # Enable debug logging
 
 # Global variables for trade tracking
 active_trades = {}
-TRADE_TIMEOUT = timedelta(minutes=10)
+TRADE_TIMEOUT = timedelta(minutes=100)
 TARGET_PRICE_CHANGE = 0.35  # Target 0.35% price change for taking profits
-LIVE_PRICE_CHANGE_MIN = 0.1  # Minimum 0.5% live price change to consider entry
-STOP_LOSS_PCT = -1.0  # Stop loss at 1% loss
+LIVE_PRICE_CHANGE_MIN = 0.1  # Minimum 0.1% live price change to consider entry
+STOP_LOSS_PCT = -100.0 # Stop loss at 1% loss
 MIN_PRICE_CHANGE = 0.05  # Minimum price movement to consider entry
-MAX_ACTIVE_TRADES = 3
-HIGH_PROB_THRESHOLD = 0.5  # 50% probability threshold for high probability trades
+MAX_ACTIVE_TRADES = 10
+HIGH_PROB_THRESHOLD = 0.5 # 50% probability threshold for high probability trades
 
 def log_debug(msg: str):
     if DEBUG_MODE:
