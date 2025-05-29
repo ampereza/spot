@@ -83,7 +83,8 @@ class BinanceTopGainersBot:
         self.take_profit = self.target_net_profit + (2 * self.maker_taker_fee)
         self.active_trades = {}
         self.top_gainers = []
-        self.stop_loss= 0.01 # 1% stop loss
+        self.stop_loss = 0.01  # 1% stop loss
+        self.ws_connected = False  # Track WebSocket connection state
         
         # Initialize Supabase client
         load_dotenv()
@@ -671,6 +672,7 @@ class BinanceTopGainersBot:
         """Connect to Binance WebSocket and process messages."""
         retry_delay = 1
         max_retry_delay = 60
+        self.ws_connected = False
         
         while True:
             try:
@@ -687,7 +689,7 @@ class BinanceTopGainersBot:
                 subscribe_payload = {
                     "method": "SUBSCRIBE",
                     "params": [
-                        f"{symbol.lower()}@miniTicker" for symbol in symbols  # Using miniTicker for efficiency
+                        f"{symbol.lower()}@miniTicker" for symbol in symbols
                     ],
                     "id": 1
                 }
@@ -702,60 +704,93 @@ class BinanceTopGainersBot:
                         close_timeout=10,
                         max_size=2**20,  # 1MB max message size
                         extra_headers={
-                            'User-Agent': 'Mozilla/5.0',  # Add user agent
-                        }
+                            'User-Agent': 'Mozilla/5.0',
+                        },
+                        compression=None  # Disable compression to reduce complexity
                     ) as websocket:
                         logger.info("WebSocket connected successfully!")
+                        self.ws_connected = True
+                        retry_delay = 1  # Reset retry delay on successful connection
                         
-                        # Send subscription request
-                        await websocket.send(json.dumps(subscribe_payload))
-                        
-                        # Wait for subscription confirmation
-                        confirmation = await websocket.recv()
-                        conf_data = json.loads(confirmation)
-                        if conf_data.get('result') is None:
-                            logger.warning("No subscription confirmation received")
-                        else:
-                            logger.info("Subscription confirmed")
-                        
-                        # Initialize prices using REST API
-                        await self.initialize_prices(symbols)
-                        
-                        while True:
-                            try:
-                                message = await websocket.recv()
-                                data = json.loads(message)
-                                
-                                # Skip subscription confirmation messages
-                                if 'result' in data:
+                        try:
+                            # Send subscription request with timeout
+                            subscription_timeout = 5  # 5 seconds timeout for subscription
+                            await asyncio.wait_for(
+                                websocket.send(json.dumps(subscribe_payload)),
+                                timeout=subscription_timeout
+                            )
+                            
+                            # Wait for subscription confirmation with timeout
+                            confirmation = await asyncio.wait_for(
+                                websocket.recv(),
+                                timeout=subscription_timeout
+                            )
+                            conf_data = json.loads(confirmation)
+                            if conf_data.get('result') is None:
+                                logger.warning("No subscription confirmation received")
+                            else:
+                                logger.info("Subscription confirmed")
+                            
+                            # Initialize prices using REST API
+                            await self.initialize_prices(symbols)
+                            
+                            while True:
+                                try:
+                                    # Use timeout for receiving messages
+                                    message = await asyncio.wait_for(
+                                        websocket.recv(),
+                                        timeout=30  # 30 seconds timeout
+                                    )
+                                    data = json.loads(message)
+                                    
+                                    # Skip subscription confirmation messages
+                                    if 'result' in data:
+                                        continue
+                                        
+                                    # Update price data from miniTicker
+                                    if 's' in data:  # Symbol exists in data
+                                        symbol = data['s']
+                                        if symbol in self.top_gainers:  # Only process if in our monitored list
+                                            try:
+                                                current_price = float(data['c'])
+                                                if current_price > 0:  # Validate price
+                                                    self.last_prices[symbol] = current_price
+                                                else:
+                                                    logger.warning(f"Received invalid price for {symbol}: {current_price}")
+                                            except (ValueError, KeyError) as e:
+                                                logger.error(f"Error processing price for {symbol}: {e}")
+                                                continue
+                                    
+                                    await self.handle_ticker_message(data)
+                                    
+                                except asyncio.TimeoutError:
+                                    logger.warning("WebSocket receive timeout, checking connection...")
+                                    # Send a ping to check if connection is still alive
+                                    pong_waiter = await websocket.ping()
+                                    try:
+                                        await asyncio.wait_for(pong_waiter, timeout=5)
+                                    except asyncio.TimeoutError:
+                                        logger.error("WebSocket ping timeout, reconnecting...")
+                                        break
+                                except websockets.exceptions.ConnectionClosed as e:
+                                    logger.warning(f"WebSocket connection closed: {str(e)}")
+                                    break
+                                except json.JSONDecodeError as e:
+                                    logger.error(f"Failed to decode message: {e}")
+                                    continue
+                                except Exception as e:
+                                    logger.error(f"Error processing message: {str(e)}")
                                     continue
                                     
-                                # Update price data from miniTicker
-                                if 's' in data:  # Symbol exists in data
-                                    symbol = data['s']
-                                    if symbol in self.top_gainers:  # Only process if in our monitored list
-                                        try:
-                                            current_price = float(data['c'])
-                                            if current_price > 0:  # Validate price
-                                                self.last_prices[symbol] = current_price
-                                            else:
-                                                logger.warning(f"Received invalid price for {symbol}: {current_price}")
-                                        except (ValueError, KeyError) as e:
-                                            logger.error(f"Error processing price for {symbol}: {e}")
-                                            continue
-                                
-                                await self.handle_ticker_message(data)
-                                
-                            except websockets.exceptions.ConnectionClosed as e:
-                                logger.warning(f"WebSocket connection closed: {str(e)}")
-                                break
-                            except json.JSONDecodeError as e:
-                                logger.error(f"Failed to decode message: {e}")
-                                continue
-                            except Exception as e:
-                                logger.error(f"Error processing message: {str(e)}")
-                                continue
-                                
+                        except asyncio.TimeoutError:
+                            logger.error("Timeout during WebSocket operation")
+                            continue
+                        except Exception as e:
+                            logger.error(f"Error in WebSocket message loop: {str(e)}")
+                            continue
+                        finally:
+                            self.ws_connected = False
+                            
                 except websockets.exceptions.InvalidStatusCode as e:
                     logger.error(f"Invalid status code from WebSocket server: {e.status_code}")
                     await asyncio.sleep(retry_delay)
@@ -776,7 +811,7 @@ class BinanceTopGainersBot:
                 continue
             
             # If we get here, try to reconnect after a delay
-            logger.info("Attempting to reconnect...")
+            logger.info(f"Attempting to reconnect in {retry_delay} seconds...")
             await asyncio.sleep(retry_delay)
             retry_delay = min(retry_delay * 2, max_retry_delay)
 
@@ -956,23 +991,42 @@ class BinanceTopGainersBot:
         logger.info(f"Take profit target: {self.take_profit:.2f}%")
         logger.info("Press Ctrl+C to exit the bot\n")
         
-        tasks = [
-            asyncio.create_task(self.connect_websocket()),
-            asyncio.create_task(self.display_status()),
-            asyncio.create_task(self.update_top_gainers()),
-            asyncio.create_task(self.display_spot_wallet_balances())
-        ]
-        
+        tasks = []
         try:
+            tasks = [
+                asyncio.create_task(self.connect_websocket()),
+                asyncio.create_task(self.display_status()),
+                asyncio.create_task(self.update_top_gainers()),
+                asyncio.create_task(self.display_spot_wallet_balances())
+            ]
+            
+            # Wait for tasks to complete or KeyboardInterrupt
             await asyncio.gather(*tasks)
+            
         except KeyboardInterrupt:
-            logger.info("\nGracefully shutting down the bot...")
+            logger.info("\nReceived shutdown signal. Gracefully shutting down the bot...")
+            
         except Exception as e:
             logger.error(f"Fatal error in main loop: {e}")
+            
         finally:
+            # Cancel all tasks
             for task in tasks:
-                task.cancel()
-            logger.info("Bot shutdown complete")
+                if not task.done():
+                    task.cancel()
+                    
+            # Wait for all tasks to complete their cleanup
+            try:
+                await asyncio.gather(*tasks, return_exceptions=True)
+            except asyncio.CancelledError:
+                pass
+            
+            # Final cleanup
+            if self.ws_connected:
+                logger.info("Closing WebSocket connection...")
+                self.ws_connected = False
+            
+            logger.info("Bot shutdown complete. Goodbye!")
 
 if __name__ == "__main__":
     bot = BinanceTopGainersBot()
