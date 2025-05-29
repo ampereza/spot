@@ -362,11 +362,6 @@ def check_trade_exit(symbol: str, current_price: float) -> bool:
     trade = active_trades[symbol]
     current_time = datetime.now(timezone.utc)
     
-    # Remove or comment out the following two lines:
-    # realtime_price = price_tracker.get_price(symbol)
-    # if realtime_price:  # Use real-time price if available
-    #     current_price = realtime_price
-    
     # Skip if price is invalid
     if not current_price or current_price <= 0:
         print(f"[WARNING] Invalid exit price for {symbol}: {current_price}")
@@ -375,28 +370,10 @@ def check_trade_exit(symbol: str, current_price: float) -> bool:
     price_change = ((current_price - trade.entry_price) / trade.entry_price) * 100
     actual_pnl = calculate_pnl(INVESTMENT_AMOUNT, price_change, BINANCE_FEES_PCT)
     
-    # Quick exit conditions - Exit immediately if price is at or above entry
-    quick_exit = current_price >= trade.entry_price  # Immediate exit on breakeven or profit
+    # Check exit conditions
     timeout_exit = (current_time - trade.timestamp) > TRADE_TIMEOUT
     stop_loss_triggered = price_change <= STOP_LOSS_PCT  # Keep stop loss for protection
     profit_target_reached = price_change >= TARGET_PRICE_CHANGE
-    
-    # Prioritize quick exit if price is favorable
-    if quick_exit:
-        exit_reason = "Quick Exit ⚡"
-        print(f"\n[TRADE EXIT] {symbol}")
-        print(f"Entry Price: {trade.entry_price:.8f}")
-        print(f"Exit Price: {current_price:.8f} ({price_change:+.2f}%)")
-        print(f"Time in trade: {current_time - trade.timestamp}")
-        print(f"Investment: {INITIAL_INVESTMENT:.2f} USDT")
-        print(f"Final PnL: {actual_pnl:.2f} USDT")
-        print(f"Reason: {exit_reason}")
-        
-        if trade.trade_id is not None:
-            update_trade_exit(trade.trade_id, current_price, actual_pnl, exit_reason)
-        
-        del active_trades[symbol]
-        return True
         
     if timeout_exit or profit_target_reached or stop_loss_triggered:
         if profit_target_reached:
